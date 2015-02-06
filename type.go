@@ -306,24 +306,14 @@ func implementsTextUnmarshaler(t reflect.Type) bool {
 // that unmarshals the given type from the given tag
 // using its UnmarshalText method.
 func unmarshalWithUnmarshalText(t reflect.Type, tag tag) unmarshaler {
-	m, ok := reflect.PtrTo(t).MethodByName("UnmarshalText")
-	if !ok {
-		panic("UnmarshalText not found!")
-	}
 	getVal := formGetters[tag.source]
 	if getVal == nil {
 		panic("unexpected source")
 	}
 	return func(v reflect.Value, p Params, makeResult resultMaker) error {
 		val, _ := getVal(tag.name, p)
-		method := makeResult(v).Addr().Method(m.Index)
-		args := []reflect.Value{reflect.ValueOf([]byte(val))}
-		out := method.Call(args)[0]
-		if out.IsNil() {
-			return nil
-		}
-		// There's an error, so return it.
-		return out.Interface().(error)
+		uv := makeResult(v).Addr().Interface().(encoding.TextUnmarshaler)
+		return uv.UnmarshalText([]byte(val))
 	}
 }
 
