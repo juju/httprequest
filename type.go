@@ -67,6 +67,11 @@ type field struct {
 	makeResult resultMaker
 }
 
+var (
+	ErrUnmarshal        = errgo.New("httprequest unmarshal error")
+	ErrBadUnmarshalType = errgo.New("httprequest bad unmarshal type")
+)
+
 // Unmarshal takes values from given parameters and fills
 // out fields in x, which must be a pointer to a struct.
 //
@@ -100,17 +105,31 @@ type field struct {
 // UnmarshalText method will be used
 //
 // -  otherwise fmt.Sscan will be used to set the value.
+//
+// When the unmarshaling fails, Unmarshal returns an error with an
+// ErrUnmarshal cause. If the type of x is inappropriate,
+// it returns an error with an ErrBadUnmarshalType cause.
 func Unmarshal(p Params, x interface{}) error {
 	xv := reflect.ValueOf(x)
 	pt, err := getRequestType(xv.Type())
 	if err != nil {
-		return errgo.Notef(err, "bad type %s", xv.Type())
+		return errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", xv.Type())
 	}
+	if err := unmarshal(p, xv, pt); err != nil {
+		return errgo.Mask(err, errgo.Is(ErrUnmarshal))
+	}
+	return nil
+}
+
+// unmarshal is the internal version of Unmarshal.
+func unmarshal(p Params, xv reflect.Value, pt *requestType) error {
 	xv = xv.Elem()
 	for _, f := range pt.fields {
 		fv := xv.FieldByIndex(f.index)
+		// TODO store the field name in the field so
+		// that we can produce a nice error message.
 		if err := f.unmarshal(fv, p, f.makeResult); err != nil {
-			return errgo.Mask(err)
+			return errgo.WithCausef(err, ErrUnmarshal, "cannot unmarshal into field")
 		}
 	}
 	return nil
@@ -430,7 +449,9 @@ func addFields(t reflect.Type, byName map[string]reflect.StructField, index []in
 			if f.Type.Kind() == reflect.Ptr {
 				f.Type = f.Type.Elem()
 			}
-			addFields(f.Type, byName, index)
+			if f.Type.Kind() == reflect.Struct {
+				addFields(f.Type, byName, index)
+			}
 		}
 	}
 }
