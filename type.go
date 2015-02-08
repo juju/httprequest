@@ -269,7 +269,7 @@ func unmarshalString(tag tag) unmarshaler {
 	return func(v reflect.Value, p Params, makeResult resultMaker) error {
 		val, ok := getVal(tag.name, p)
 		if ok {
-			makeResult(v).Set(reflect.ValueOf(val))
+			makeResult(v).SetString(val)
 		}
 		return nil
 	}
