@@ -170,6 +170,11 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 	hasBody := false
 	var pt requestType
 	for _, f := range fields(t.Elem()) {
+		if f.PkgPath != "" {
+			// Ignore unexported fields (note that this
+			// does not apply to anonymous fields).
+			continue
+		}
 		tag, err := parseTag(f.Tag, f.Name)
 		if err != nil {
 			return nil, errgo.Notef(err, "bad tag %q in field %s", f.Tag, f.Name)
