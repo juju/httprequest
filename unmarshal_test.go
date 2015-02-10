@@ -102,6 +102,65 @@ var unmarshalTests = []struct {
 		}},
 	},
 }, {
+	about: "unexported fields are ignored",
+	val: struct {
+		f int `httprequest:",form"`
+		G int `httprequest:",form"`
+	}{
+		G: 99,
+	},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Form: url.Values{
+				"G": {"99"},
+				"f": {"100"},
+			},
+		},
+	},
+}, {
+	about: "unexported embedded type works ok",
+	val: struct {
+		sFG
+	}{
+		sFG: sFG{
+			F: 99,
+			G: 100,
+		},
+	},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Form: url.Values{
+				"F": {"99"},
+				"G": {"100"},
+			},
+		},
+	},
+}, {
+	about: "unexported embedded type for body works ok",
+	val: struct {
+		sFG `httprequest:",body"`
+	}{
+		sFG: sFG{
+			F: 99,
+			G: 100,
+		},
+	},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Body: body(`{"F": 99, "G": 100}`),
+		},
+	},
+}, {
+	about: "unexported type for body is ignored",
+	val: struct {
+		foo sFG `httprequest:",body"`
+	}{},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Body: body(`{"F": 99, "G": 100}`),
+		},
+	},
+}, {
 	about: "fields without httprequest tags are ignored",
 	val: struct {
 		F int
@@ -290,6 +349,11 @@ var unmarshalTests = []struct {
 }}
 
 type SFG struct {
+	F int `httprequest:",form"`
+	G int `httprequest:",form"`
+}
+
+type sFG struct {
 	F int `httprequest:",form"`
 	G int `httprequest:",form"`
 }
