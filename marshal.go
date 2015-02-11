@@ -21,30 +21,30 @@ import (
 //
 // See: Unmarshal for more details.
 //
-// For fields with a "path" item in the structural tag, the request uri must
+// For fields with a "path" item in the structural tag, the base uri must
 // contain a placeholder with its name.
 // Example:
 // For
 //    type Test struct {
 //	    username string `httprequest:"user,path"`
 //    }
-// ...the request url must contain a "::user::" placeholder:
+// ...the request url must contain a ":user" placeholder:
 //    http://localhost:8081/:user/files
 //
 // If a type does not implement the encoding.TextMarshaler fmt.Sprint will
 // be used to marshal its value.
-func Marshal(baseURL, method string, input interface{}) (*http.Request, error) {
-	xv := reflect.ValueOf(input)
-	pt, err := getRequestType(preprocessType{reflectType: xv.Type(), purpose: purposeMarshal})
+func Marshal(baseURL, method string, i interface{}) (*http.Request, error) {
+	input := reflect.ValueOf(i)
+	pt, err := getRequestType(preprocessType{reflectType: input.Type(), purpose: purposeMarshal})
 	if err != nil {
-		return nil, errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", xv.Type())
+		return nil, errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", input.Type())
 	}
 	req, err := http.NewRequest(method, baseURL, bytes.NewBuffer(nil))
 	if err != nil {
 		return nil, errgo.Mask(err)
 	}
 	p := &Params{req, httprouter.Params{}}
-	if err := marshal(p, xv, pt); err != nil {
+	if err := marshal(p, input, pt); err != nil {
 		return nil, errgo.Mask(err, errgo.Is(ErrUnmarshal))
 	}
 	return p.Request, nil
