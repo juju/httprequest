@@ -52,9 +52,8 @@ func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 
 // marshal is the internal version of Marshal.
 func marshal(p *Params, xv reflect.Value, pt *requestType) error {
-	if xv.Kind() == reflect.Ptr {
-		xv = xv.Elem()
-	}
+	xv = xv.Elem()
+
 	for _, f := range pt.fields {
 		fv := xv.FieldByIndex(f.index)
 
@@ -65,7 +64,7 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 		}
 	}
 
-	urlString := p.URL.Path
+	path := p.URL.Path
 	var pathBuffer bytes.Buffer
 	paramsByName := make(map[string]string)
 	for _, param := range p.PathVar {
@@ -74,26 +73,30 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 
 	offset := 0
 	hasParams := false
-	for i := 0; i < len(urlString); i++ {
-		c := urlString[i]
-		if c != ':' {
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		if c != ':' && c != '*' {
 			continue
 		}
 		hasParams = true
 
 		end := i + 1
-		for end < len(urlString) && urlString[end] != ':' && urlString[end] != '/' {
+		for end < len(path) && path[end] != ':' && path[end] != '/' {
 			end++
+		}
+
+		if c == '*' && end != len(path) {
+			return errgo.New("placeholders starting with * are only allowed at the end")
 		}
 
 		if end-i < 2 {
 			return errgo.New("request wildcards must be named with a non-empty name")
 		}
 		if i > 0 {
-			pathBuffer.WriteString(urlString[offset:i])
+			pathBuffer.WriteString(path[offset:i])
 		}
 
-		wildcard := urlString[i+1 : end]
+		wildcard := path[i+1 : end]
 		paramValue, ok := paramsByName[wildcard]
 		if !ok {
 			return errgo.Newf("missing value for path parameter %q", wildcard)
@@ -102,7 +105,7 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 		offset = end
 	}
 	if !hasParams {
-		pathBuffer.WriteString(urlString)
+		pathBuffer.WriteString(path)
 	}
 
 	p.URL.Path = pathBuffer.String()

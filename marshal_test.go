@@ -311,6 +311,30 @@ var marshalTests = []struct {
 		return &v
 	},
 	expectURLString: "http://localhost:8081/u",
+}, {
+	about:     "marshal to path with * placeholder",
+	urlString: "http://localhost:8081/u/*name",
+	val: func() interface{} {
+		v := struct {
+			F1 string `httprequest:"name,path"`
+		}{
+			F1: "test",
+		}
+		return &v
+	},
+	expectURLString: "http://localhost:8081/u/test",
+}, {
+	about:     "* placeholder allowed only at the ned",
+	urlString: "http://localhost:8081/u/*name/document",
+	val: func() interface{} {
+		v := struct {
+			F1 string `httprequest:"name,path"`
+		}{
+			F1: "test",
+		}
+		return &v
+	},
+	expectError: `placeholders starting with \* are only allowed at the end`,
 },
 }
 
