@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"mime"
 	"net/http"
 	"reflect"
 	"sort"
@@ -73,6 +74,9 @@ type field struct {
 	// makeResult is the resultMaker that will be
 	// passed into the unmarshaler.
 	makeResult resultMaker
+
+	// isPointer is true if the field is pointer to the underlying type.
+	isPointer bool
 }
 
 var (
@@ -177,16 +181,9 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 		return nil, fmt.Errorf("type is not pointer to struct")
 	}
 
-	var reflectType reflect.Type
-	if t.Kind() == reflect.Ptr {
-		reflectType = t.Elem()
-	} else {
-		reflectType = t
-	}
-
 	hasBody := false
 	var pt requestType
-	for _, f := range fields(reflectType) {
+	for _, f := range fields(t.Elem()) {
 		if f.PkgPath != "" {
 			// Ignore unexported fields (note that this
 			// does not apply to anonymous fields).
@@ -210,9 +207,11 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 			// we need to create a new pointer to put
 			// it into.
 			field.makeResult = makePointerResult
+			field.isPointer = true
 			f.Type = f.Type.Elem()
 		} else {
 			field.makeResult = makeValueResult
+			field.isPointer = false
 		}
 
 		field.unmarshal, err = getUnmarshaler(tag, f.Type)
@@ -307,6 +306,13 @@ func unmarshalString(tag tag) unmarshaler {
 // unmarshalBody unmarshals the http request body
 // into the given value.
 func unmarshalBody(v reflect.Value, p Params, makeResult resultMaker) error {
+	mediaType, _, err := mime.ParseMediaType(p.Header.Get("Content-Type"))
+	if err != nil {
+		return errgo.Mask(err)
+	}
+	if mediaType != "application/json" {
+		return errgo.Newf("unexpected content type: expected \"application/json\", got %q", mediaType)
+	}
 	data, err := ioutil.ReadAll(p.Body)
 	if err != nil {
 		return errgo.Notef(err, "cannot read request body")

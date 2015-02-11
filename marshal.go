@@ -12,27 +12,51 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strings"
 
 	"github.com/julienschmidt/httprouter"
 	"gopkg.in/errgo.v1"
 )
 
-// Marshal takes the input structure and creates an http request.
+//  Marshal is the counterpart of Unmarshal. It takes information from
+//  x, which must be a pointer to a struct, and returns an HTTP request
+//  using the given method that holds all of the information
 //
-// See: Unmarshal for more details.
+//  The HTTP request will use the given method.  Named fields in the given
+//  baseURL will be filled out from "path"-tagged fields in x to form the
+//  URL path in the returned request.  These are specified as for httprouter.
 //
-// For fields with a "path" item in the structural tag, the base uri must
-// contain a placeholder with its name.
-// Example:
-// For
-//    type Test struct {
-//	    username string `httprequest:"user,path"`
-//    }
-// ...the request url must contain a ":user" placeholder:
-//    http://localhost:8081/:user/files
+//  If a field is of type string or []string, the value of the field will
+//  be used directly; otherwise if implements encoding.TextMarshaler, that
+//  will be used to marshal the field, otherwise fmt.Sprint will be used.
 //
-// If url path contains a placeholder, but the input struct does not marshal
-// to that placeholder, an error is raised.
+//  For example, this code:
+//
+//      type UserDetails struct {
+//          Age int
+//      }
+//       type Test struct {
+//          Username string `httprequest:"user,path"`
+//          ContextId int64 `httprequest:"context,form"`
+//          Details UserDetails `httprequest:",body"`
+//      }
+//  req, err := Marshal("GET", "http://example.com/users/:user/details", &Test{
+//      Username: "bob",
+//      ContextId: 1234,
+//      Details: UserDetails{
+//          Age: 36,
+//      }
+//  })
+//  if err != nil {
+//      ...
+//  }
+//
+// will produce an HTTP request req with a URL of
+// http://example.com/users/bob/details?context=1234 and a JSON-encoded
+// body holding `{"Age":36}`.
+//
+// It is an error if there is a field specified in the URL that is not
+// found in x.
 func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 	xv := reflect.ValueOf(x)
 	pt, err := getRequestType(xv.Type())
@@ -43,6 +67,7 @@ func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 	if err != nil {
 		return nil, errgo.Mask(err)
 	}
+	req.Form = url.Values{}
 
 	p := &Params{
 		Request: req,
@@ -61,6 +86,12 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 	for _, f := range pt.fields {
 		fv := xv.FieldByIndex(f.index)
 
+		if f.isPointer {
+			if fv.IsNil() {
+				continue
+			}
+			fv = fv.Elem()
+		}
 		// TODO store the field name in the field so
 		// that we can produce a nice error message.
 		if err := f.marshal(fv, p); err != nil {
@@ -68,55 +99,68 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 		}
 	}
 
-	path := p.URL.Path
-	var pathBuffer bytes.Buffer
-	paramsByName := make(map[string]string)
-	for _, param := range p.PathVar {
-		paramsByName[param.Key] = param.Value
+	path, err := buildPath(p.URL.Path, p.PathVar)
+	if err != nil {
+		return errgo.Mask(err)
 	}
 
-	offset := 0
-	hasParams := false
-	for i := 0; i < len(path); i++ {
-		c := path[i]
-		if c != ':' && c != '*' {
-			continue
-		}
-		hasParams = true
-
-		end := i + 1
-		for end < len(path) && path[end] != ':' && path[end] != '/' {
-			end++
-		}
-
-		if c == '*' && end != len(path) {
-			return errgo.New("placeholders starting with * are only allowed at the end")
-		}
-
-		if end-i < 2 {
-			return errgo.New("request wildcards must be named with a non-empty name")
-		}
-		if i > 0 {
-			pathBuffer.WriteString(path[offset:i])
-		}
-
-		wildcard := path[i+1 : end]
-		paramValue, ok := paramsByName[wildcard]
-		if !ok {
-			return errgo.Newf("missing value for path parameter %q", wildcard)
-		}
-		pathBuffer.WriteString(paramValue)
-		offset = end
-	}
-	if !hasParams {
-		pathBuffer.WriteString(path)
-	}
-
-	p.URL.Path = pathBuffer.String()
-
+	p.URL.Path = path
 	p.URL.RawQuery = p.Form.Encode()
 
 	return nil
+}
+
+func buildPath(path string, p httprouter.Params) (string, error) {
+	pathBytes := make([]byte, 0, len(path)*2)
+	for {
+		s, rest := nextPathSegment(path)
+		if s == "" {
+			break
+		}
+		if s[0] != ':' && s[0] != '*' {
+			pathBytes = append(pathBytes, s...)
+			path = rest
+			continue
+		}
+		if s[0] == '*' && rest != "" {
+			return "", errgo.New("star path parameter is not at end of path")
+		}
+		if len(s) == 1 {
+			return "", errgo.New("empty path parameter")
+		}
+		val := p.ByName(s[1:])
+		if val == "" {
+			return "", errgo.Newf("missing value for path parameter %q", s[1:])
+		}
+		if s[0] == '*' {
+			if !strings.HasPrefix(val, "/") {
+				return "", errgo.Newf("value %q for path parameter %q does not start with required /", val, s)
+			}
+			val = val[1:]
+		}
+		pathBytes = append(pathBytes, val...)
+		path = rest
+	}
+	return string(pathBytes), nil
+}
+
+// nextPathSegment returns the next wildcard or constant
+// segment of the given path and everything after that
+// segment.
+func nextPathSegment(s string) (string, string) {
+	if s == "" {
+		return "", ""
+	}
+	if s[0] == ':' || s[0] == '*' {
+		if i := strings.Index(s, "/"); i != -1 {
+			return s[0:i], s[i:]
+		}
+		return s, ""
+	}
+	if i := strings.IndexAny(s, ":*"); i != -1 {
+		return s[0:i], s[i:]
+	}
+	return s, ""
 }
 
 // getMarshaler returns a marshaler function suitable for marshaling
@@ -141,16 +185,6 @@ func getMarshaler(tag tag, t reflect.Type) (marshaler, error) {
 	}
 }
 
-func dereferenceIfPointer(v reflect.Value) reflect.Value {
-	if v.Kind() == reflect.Ptr {
-		if v.IsNil() {
-			return reflect.Value{}
-		}
-		return v.Elem()
-	}
-	return v
-}
-
 // marshalNop does nothing with the value.
 func marshalNop(v reflect.Value, p *Params) error {
 	return nil
@@ -159,37 +193,23 @@ func marshalNop(v reflect.Value, p *Params) error {
 // mashalBody marshals the specified value into the body of the http request.
 func marshalBody(v reflect.Value, p *Params) error {
 	// TODO allow body types that aren't necessarily JSON.
-	bodyValue := dereferenceIfPointer(v)
-	if bodyValue == emptyValue {
-		return nil
-	}
-
-	if p.Method != "POST" && p.Method != "PUT" {
+	if p.Method == "GET" || p.Method == "HEAD" {
 		return errgo.Newf("trying to marshal to body of a request with method %q", p.Method)
 	}
 
-	data, err := json.Marshal(bodyValue.Interface())
+	data, err := json.Marshal(v.Addr().Interface())
 	if err != nil {
 		return errgo.Notef(err, "cannot marshal request body")
 	}
-	p.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+	p.Body = ioutil.NopCloser(bytes.NewReader(data))
+	p.Header.Set("Content-Type", "application/json")
 	return nil
 }
 
 // marshalAllField marshals a []string slice into form fields.
 func marshalAllField(name string) marshaler {
 	return func(v reflect.Value, p *Params) error {
-		value := dereferenceIfPointer(v)
-		if value == emptyValue {
-			return nil
-		}
-		values := value.Interface().([]string)
-		if p.Form == nil {
-			p.Form = url.Values{}
-		}
-		for _, value := range values {
-			p.Form.Add(name, value)
-		}
+		p.Form[name] = v.Interface().([]string)
 		return nil
 	}
 }
@@ -201,11 +221,7 @@ func marshalString(tag tag) marshaler {
 		panic("unexpected source")
 	}
 	return func(v reflect.Value, p *Params) error {
-		value := dereferenceIfPointer(v)
-		if value == emptyValue {
-			return nil
-		}
-		formSet(tag.name, value.String(), p)
+		formSet(tag.name, v.String(), p)
 		return nil
 	}
 }
@@ -228,11 +244,7 @@ func marshalWithMarshalText(t reflect.Type, tag tag) marshaler {
 		panic("unexpected source")
 	}
 	return func(v reflect.Value, p *Params) error {
-		value := dereferenceIfPointer(v)
-		if value == emptyValue {
-			return nil
-		}
-		m := value.Addr().Interface().(encoding.TextMarshaler)
+		m := v.Addr().Interface().(encoding.TextMarshaler)
 		data, err := m.MarshalText()
 		if err != nil {
 			return errgo.Mask(err)
@@ -251,11 +263,7 @@ func marshalWithSprint(tag tag) marshaler {
 		panic("unexpected source")
 	}
 	return func(v reflect.Value, p *Params) error {
-		value := dereferenceIfPointer(v)
-		if value == emptyValue {
-			return nil
-		}
-		valueString := fmt.Sprint(value.Interface())
+		valueString := fmt.Sprint(v.Interface())
 
 		formSet(tag.name, valueString, p)
 
@@ -267,10 +275,7 @@ func marshalWithSprint(tag tag) marshaler {
 // sets the value for a given key.
 var formSetters = []func(string, string, *Params){
 	sourceForm: func(name, value string, p *Params) {
-		if p.Form == nil {
-			p.Form = url.Values{}
-		}
-		p.Form.Add(name, value)
+		p.Form.Set(name, value)
 	},
 	sourcePath: func(name, value string, p *Params) {
 		p.PathVar = append(p.PathVar, httprouter.Param{Key: name, Value: value})

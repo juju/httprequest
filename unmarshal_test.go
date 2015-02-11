@@ -53,6 +53,7 @@ var unmarshalTests = []struct {
 	},
 	params: httprequest.Params{
 		Request: &http.Request{
+			Header: http.Header{"Content-Type": {"application/json"}},
 			Form: url.Values{
 				"F1": {"99"},
 				"F2": {"-35", "not a number"},
@@ -147,7 +148,8 @@ var unmarshalTests = []struct {
 	},
 	params: httprequest.Params{
 		Request: &http.Request{
-			Body: body(`{"F": 99, "G": 100}`),
+			Header: http.Header{"Content-Type": {"application/json"}},
+			Body:   body(`{"F": 99, "G": 100}`),
 		},
 	},
 }, {
@@ -157,7 +159,8 @@ var unmarshalTests = []struct {
 	}{},
 	params: httprequest.Params{
 		Request: &http.Request{
-			Body: body(`{"F": 99, "G": 100}`),
+			Header: http.Header{"Content-Type": {"application/json"}},
+			Body:   body(`{"F": 99, "G": 100}`),
 		},
 	},
 }, {
@@ -296,7 +299,8 @@ var unmarshalTests = []struct {
 	}{},
 	params: httprequest.Params{
 		Request: &http.Request{
-			Body: body("invalid JSON"),
+			Header: http.Header{"Content-Type": {"application/json"}},
+			Body:   body("invalid JSON"),
 		},
 	},
 	expectError: "cannot unmarshal into field: cannot unmarshal request body: invalid character 'i' looking for beginning of value",
@@ -307,7 +311,8 @@ var unmarshalTests = []struct {
 	}{},
 	params: httprequest.Params{
 		Request: &http.Request{
-			Body: errorReader("some error"),
+			Header: http.Header{"Content-Type": {"application/json"}},
+			Body:   errorReader("some error"),
 		},
 	},
 	expectError: "cannot unmarshal into field: cannot read request body: some error",
@@ -333,7 +338,8 @@ var unmarshalTests = []struct {
 	},
 	params: httprequest.Params{
 		Request: &http.Request{
-			Body: body(`"hello"`),
+			Header: http.Header{"Content-Type": {"application/json"}},
+			Body:   body(`"hello"`),
 		},
 	},
 }, {
@@ -346,6 +352,18 @@ var unmarshalTests = []struct {
 	about:       "non-struct pointer",
 	val:         0,
 	expectError: `bad type \*int: type is not pointer to struct`,
+}, {
+	about: "unmarshaling with wrong request content type",
+	val: struct {
+		A string `httprequest:",body"`
+	}{},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Header: http.Header{"Content-Type": {"text/html"}},
+			Body:   body("invalid JSON"),
+		},
+	},
+	expectError: "cannot unmarshal into field: unexpected content type: expected \"application/json\", got \"text/html\"",
 }}
 
 type SFG struct {
