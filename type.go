@@ -22,9 +22,21 @@ import (
 
 // TODO include field name and source in error messages.
 
+type preprocessPurpose uint8
+
+const (
+	purposeMarshal = iota
+	purposeUnmarshal
+)
+
+type preprocessType struct {
+	reflectType reflect.Type
+	purpose     preprocessPurpose
+}
+
 var (
 	typeMutex sync.RWMutex
-	typeMap   = make(map[reflect.Type]*requestType)
+	typeMap   = make(map[preprocessType]*requestType)
 )
 
 // Params holds request parameters that can
@@ -45,6 +57,9 @@ type resultMaker func(reflect.Value) reflect.Value
 // but passed to makeResult and then updated.
 type unmarshaler func(v reflect.Value, p Params, makeResult resultMaker) error
 
+// marshaler marshals the specified value into params.
+type marshaler func(reflect.Value, *Params, resultMaker) error
+
 // requestType holds information derived from a request
 // type, preprocessed so that it's nice and quick to unmarshal.
 type requestType struct {
@@ -62,6 +77,11 @@ type field struct {
 	// argument is not a pointer type, but is addressable.
 	unmarshal unmarshaler
 
+	// marshal is used to marshal the value into the
+	// give filed. The value passed as its first argument is not
+	// a pointer type, but it is addressable.
+	marshal marshaler
+
 	// makeResult is the resultMaker that will be
 	// passed into the unmarshaler.
 	makeResult resultMaker
@@ -70,6 +90,7 @@ type field struct {
 var (
 	ErrUnmarshal        = errgo.New("httprequest unmarshal error")
 	ErrBadUnmarshalType = errgo.New("httprequest bad unmarshal type")
+	emptyValue          = reflect.Value{}
 )
 
 // Unmarshal takes values from given parameters and fills
@@ -111,7 +132,7 @@ var (
 // it returns an error with an ErrBadUnmarshalType cause.
 func Unmarshal(p Params, x interface{}) error {
 	xv := reflect.ValueOf(x)
-	pt, err := getRequestType(xv.Type())
+	pt, err := getRequestType(preprocessType{reflectType: xv.Type(), purpose: purposeUnmarshal})
 	if err != nil {
 		return errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", xv.Type())
 	}
@@ -138,38 +159,46 @@ func unmarshal(p Params, xv reflect.Value, pt *requestType) error {
 // getRequestType is like parseRequestType except that
 // it returns the cached requestType when possible,
 // adding the type to the cache otherwise.
-func getRequestType(t reflect.Type) (*requestType, error) {
+func getRequestType(k preprocessType) (*requestType, error) {
 	typeMutex.RLock()
-	pt := typeMap[t]
+	pt := typeMap[k]
 	typeMutex.RUnlock()
 	if pt != nil {
 		return pt, nil
 	}
 	typeMutex.Lock()
 	defer typeMutex.Unlock()
-	if pt = typeMap[t]; pt != nil {
+	if pt = typeMap[k]; pt != nil {
 		// The type has been parsed after we dropped
 		// the read lock, so use it.
 		return pt, nil
 	}
-	pt, err := parseRequestType(t)
+	pt, err := parseRequestType(k)
 	if err != nil {
 		return nil, errgo.Mask(err)
 	}
-	typeMap[t] = pt
+	typeMap[k] = pt
 	return pt, nil
 }
 
 // parseRequestType preprocesses the given type
 // into a form that can be efficiently interpreted
 // by Unmarshal.
-func parseRequestType(t reflect.Type) (*requestType, error) {
-	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
+func parseRequestType(t preprocessType) (*requestType, error) {
+	if t.reflectType.Kind() != reflect.Ptr || t.reflectType.Elem().Kind() != reflect.Struct {
 		return nil, fmt.Errorf("type is not pointer to struct")
 	}
+
+	var reflectType reflect.Type
+	if t.reflectType.Kind() == reflect.Ptr {
+		reflectType = t.reflectType.Elem()
+	} else {
+		reflectType = t.reflectType
+	}
+
 	hasBody := false
 	var pt requestType
-	for _, f := range fields(t.Elem()) {
+	for _, f := range fields(reflectType) {
 		if f.PkgPath != "" {
 			// Ignore unexported fields (note that this
 			// does not apply to anonymous fields).
@@ -192,15 +221,22 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 			// The field is a pointer, so when the value is set,
 			// we need to create a new pointer to put
 			// it into.
-			field.makeResult = makePointerResult
+			field.makeResult = makePointerResult(t.purpose)
 			f.Type = f.Type.Elem()
 		} else {
 			field.makeResult = makeValueResult
 		}
+
 		field.unmarshal, err = getUnmarshaler(tag, f.Type)
 		if err != nil {
 			return nil, errgo.Mask(err)
 		}
+
+		field.marshal, err = getMarshaler(tag, f.Type)
+		if err != nil {
+			return nil, errgo.Mask(err)
+		}
+
 		if f.Anonymous {
 			if tag.source != sourceBody && tag.source != sourceNone {
 				return nil, errgo.New("httprequest tag not yet supported on anonymous fields")
@@ -211,11 +247,21 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 	return &pt, nil
 }
 
-func makePointerResult(v reflect.Value) reflect.Value {
-	if v.IsNil() {
-		v.Set(reflect.New(v.Type().Elem()))
+func makePointerResult(purpose preprocessPurpose) resultMaker {
+	if purpose == purposeUnmarshal {
+		return func(v reflect.Value) reflect.Value {
+			if v.IsNil() {
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			return v.Elem()
+		}
 	}
-	return v.Elem()
+	return func(v reflect.Value) reflect.Value {
+		if v.IsNil() {
+			return emptyValue
+		}
+		return v.Elem()
+	}
 }
 
 func makeValueResult(v reflect.Value) reflect.Value {

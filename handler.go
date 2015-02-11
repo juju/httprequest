@@ -70,7 +70,7 @@ func checkHandleType(t reflect.Type) (*requestType, error) {
 	if t.In(1) != paramsType {
 		return nil, errgo.Newf("second argument is %s, need %s", t.In(1), paramsType)
 	}
-	pt, err := getRequestType(t.In(2))
+	pt, err := getRequestType(preprocessType{reflectType: t.In(2), purpose: purposeUnmarshal})
 	if err != nil {
 		return nil, errgo.Notef(err, "third argument cannot be used for Unmarshal")
 	}
