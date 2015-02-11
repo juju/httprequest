@@ -31,8 +31,8 @@ import (
 // ...the request url must contain a ":user" placeholder:
 //    http://localhost:8081/:user/files
 //
-// If a type does not implement the encoding.TextMarshaler fmt.Sprint will
-// be used to marshal its value.
+// If url path contains a placeholder, but the input struct does not marshal
+// to that placeholder, an error is raised.
 func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 	xv := reflect.ValueOf(x)
 	pt, err := getRequestType(xv.Type())
@@ -43,7 +43,11 @@ func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 	if err != nil {
 		return nil, errgo.Mask(err)
 	}
-	p := &Params{req, httprouter.Params{}}
+
+	p := &Params{
+		Request: req,
+	}
+
 	if err := marshal(p, xv, pt); err != nil {
 		return nil, errgo.Mask(err, errgo.Is(ErrUnmarshal))
 	}
