@@ -33,18 +33,18 @@ import (
 //
 // If a type does not implement the encoding.TextMarshaler fmt.Sprint will
 // be used to marshal its value.
-func Marshal(baseURL, method string, i interface{}) (*http.Request, error) {
-	input := reflect.ValueOf(i)
-	pt, err := getRequestType(preprocessType{reflectType: input.Type(), purpose: purposeMarshal})
+func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
+	xv := reflect.ValueOf(x)
+	pt, err := getRequestType(xv.Type())
 	if err != nil {
-		return nil, errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", input.Type())
+		return nil, errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", xv.Type())
 	}
 	req, err := http.NewRequest(method, baseURL, bytes.NewBuffer(nil))
 	if err != nil {
 		return nil, errgo.Mask(err)
 	}
 	p := &Params{req, httprouter.Params{}}
-	if err := marshal(p, input, pt); err != nil {
+	if err := marshal(p, xv, pt); err != nil {
 		return nil, errgo.Mask(err, errgo.Is(ErrUnmarshal))
 	}
 	return p.Request, nil
@@ -60,7 +60,7 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 
 		// TODO store the field name in the field so
 		// that we can produce a nice error message.
-		if err := f.marshal(fv, p, f.makeResult); err != nil {
+		if err := f.marshal(fv, p); err != nil {
 			return errgo.WithCausef(err, ErrUnmarshal, "cannot marshal field")
 		}
 	}
@@ -134,15 +134,25 @@ func getMarshaler(tag tag, t reflect.Type) (marshaler, error) {
 	}
 }
 
+func dereferenceIfPointer(v reflect.Value) reflect.Value {
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return reflect.Value{}
+		}
+		return v.Elem()
+	}
+	return v
+}
+
 // marshalNop does nothing with the value.
-func marshalNop(v reflect.Value, p *Params, makeResult resultMaker) error {
+func marshalNop(v reflect.Value, p *Params) error {
 	return nil
 }
 
 // mashalBody marshals the specified value into the body of the http request.
-func marshalBody(v reflect.Value, p *Params, makeResult resultMaker) error {
+func marshalBody(v reflect.Value, p *Params) error {
 	// TODO allow body types that aren't necessarily JSON.
-	bodyValue := makeResult(v)
+	bodyValue := dereferenceIfPointer(v)
 	if bodyValue == emptyValue {
 		return nil
 	}
@@ -161,8 +171,8 @@ func marshalBody(v reflect.Value, p *Params, makeResult resultMaker) error {
 
 // marshalAllField marshals a []string slice into form fields.
 func marshalAllField(name string) marshaler {
-	return func(v reflect.Value, p *Params, makeResult resultMaker) error {
-		value := makeResult(v)
+	return func(v reflect.Value, p *Params) error {
+		value := dereferenceIfPointer(v)
 		if value == emptyValue {
 			return nil
 		}
@@ -183,8 +193,8 @@ func marshalString(tag tag) marshaler {
 	if formSet == nil {
 		panic("unexpected source")
 	}
-	return func(v reflect.Value, p *Params, makeResult resultMaker) error {
-		value := makeResult(v)
+	return func(v reflect.Value, p *Params) error {
+		value := dereferenceIfPointer(v)
 		if value == emptyValue {
 			return nil
 		}
@@ -210,8 +220,8 @@ func marshalWithMarshalText(t reflect.Type, tag tag) marshaler {
 	if formSet == nil {
 		panic("unexpected source")
 	}
-	return func(v reflect.Value, p *Params, makeResult resultMaker) error {
-		value := makeResult(v)
+	return func(v reflect.Value, p *Params) error {
+		value := dereferenceIfPointer(v)
 		if value == emptyValue {
 			return nil
 		}
@@ -233,8 +243,8 @@ func marshalWithSprint(tag tag) marshaler {
 	if formSet == nil {
 		panic("unexpected source")
 	}
-	return func(v reflect.Value, p *Params, makeResult resultMaker) error {
-		value := makeResult(v)
+	return func(v reflect.Value, p *Params) error {
+		value := dereferenceIfPointer(v)
 		if value == emptyValue {
 			return nil
 		}

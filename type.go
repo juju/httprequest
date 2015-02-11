@@ -22,21 +22,9 @@ import (
 
 // TODO include field name and source in error messages.
 
-type preprocessPurpose uint8
-
-const (
-	purposeMarshal = iota
-	purposeUnmarshal
-)
-
-type preprocessType struct {
-	reflectType reflect.Type
-	purpose     preprocessPurpose
-}
-
 var (
 	typeMutex sync.RWMutex
-	typeMap   = make(map[preprocessType]*requestType)
+	typeMap   = make(map[reflect.Type]*requestType)
 )
 
 // Params holds request parameters that can
@@ -58,7 +46,7 @@ type resultMaker func(reflect.Value) reflect.Value
 type unmarshaler func(v reflect.Value, p Params, makeResult resultMaker) error
 
 // marshaler marshals the specified value into params.
-type marshaler func(reflect.Value, *Params, resultMaker) error
+type marshaler func(reflect.Value, *Params) error
 
 // requestType holds information derived from a request
 // type, preprocessed so that it's nice and quick to unmarshal.
@@ -132,7 +120,7 @@ var (
 // it returns an error with an ErrBadUnmarshalType cause.
 func Unmarshal(p Params, x interface{}) error {
 	xv := reflect.ValueOf(x)
-	pt, err := getRequestType(preprocessType{reflectType: xv.Type(), purpose: purposeUnmarshal})
+	pt, err := getRequestType(xv.Type())
 	if err != nil {
 		return errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", xv.Type())
 	}
@@ -159,41 +147,41 @@ func unmarshal(p Params, xv reflect.Value, pt *requestType) error {
 // getRequestType is like parseRequestType except that
 // it returns the cached requestType when possible,
 // adding the type to the cache otherwise.
-func getRequestType(k preprocessType) (*requestType, error) {
+func getRequestType(t reflect.Type) (*requestType, error) {
 	typeMutex.RLock()
-	pt := typeMap[k]
+	pt := typeMap[t]
 	typeMutex.RUnlock()
 	if pt != nil {
 		return pt, nil
 	}
 	typeMutex.Lock()
 	defer typeMutex.Unlock()
-	if pt = typeMap[k]; pt != nil {
+	if pt = typeMap[t]; pt != nil {
 		// The type has been parsed after we dropped
 		// the read lock, so use it.
 		return pt, nil
 	}
-	pt, err := parseRequestType(k)
+	pt, err := parseRequestType(t)
 	if err != nil {
 		return nil, errgo.Mask(err)
 	}
-	typeMap[k] = pt
+	typeMap[t] = pt
 	return pt, nil
 }
 
 // parseRequestType preprocesses the given type
 // into a form that can be efficiently interpreted
 // by Unmarshal.
-func parseRequestType(t preprocessType) (*requestType, error) {
-	if t.reflectType.Kind() != reflect.Ptr || t.reflectType.Elem().Kind() != reflect.Struct {
+func parseRequestType(t reflect.Type) (*requestType, error) {
+	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
 		return nil, fmt.Errorf("type is not pointer to struct")
 	}
 
 	var reflectType reflect.Type
-	if t.reflectType.Kind() == reflect.Ptr {
-		reflectType = t.reflectType.Elem()
+	if t.Kind() == reflect.Ptr {
+		reflectType = t.Elem()
 	} else {
-		reflectType = t.reflectType
+		reflectType = t
 	}
 
 	hasBody := false
@@ -221,7 +209,7 @@ func parseRequestType(t preprocessType) (*requestType, error) {
 			// The field is a pointer, so when the value is set,
 			// we need to create a new pointer to put
 			// it into.
-			field.makeResult = makePointerResult(t.purpose)
+			field.makeResult = makePointerResult
 			f.Type = f.Type.Elem()
 		} else {
 			field.makeResult = makeValueResult
@@ -247,21 +235,11 @@ func parseRequestType(t preprocessType) (*requestType, error) {
 	return &pt, nil
 }
 
-func makePointerResult(purpose preprocessPurpose) resultMaker {
-	if purpose == purposeUnmarshal {
-		return func(v reflect.Value) reflect.Value {
-			if v.IsNil() {
-				v.Set(reflect.New(v.Type().Elem()))
-			}
-			return v.Elem()
-		}
+func makePointerResult(v reflect.Value) reflect.Value {
+	if v.IsNil() {
+		v.Set(reflect.New(v.Type().Elem()))
 	}
-	return func(v reflect.Value) reflect.Value {
-		if v.IsNil() {
-			return emptyValue
-		}
-		return v.Elem()
-	}
+	return v.Elem()
 }
 
 func makeValueResult(v reflect.Value) reflect.Value {
