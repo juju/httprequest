@@ -47,6 +47,8 @@ type resultMaker func(reflect.Value) reflect.Value
 type unmarshaler func(v reflect.Value, p Params, makeResult resultMaker) error
 
 // marshaler marshals the specified value into params.
+// The value is always the value type, even if the field type
+// is a pointer.
 type marshaler func(reflect.Value, *Params) error
 
 // requestType holds information derived from a request
@@ -82,7 +84,6 @@ type field struct {
 var (
 	ErrUnmarshal        = errgo.New("httprequest unmarshal error")
 	ErrBadUnmarshalType = errgo.New("httprequest bad unmarshal type")
-	emptyValue          = reflect.Value{}
 )
 
 // Unmarshal takes values from given parameters and fills
