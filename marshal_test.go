@@ -133,6 +133,15 @@ var marshalTests = []struct {
 	},
 	expectURLString: "http://localhost:8081/user",
 }, {
+	about:     "cannot marshal []string field to path",
+	urlString: "http://localhost:8081/:users",
+	val: &struct {
+		F1 []string `httprequest:"users,path"`
+	}{
+		F1: []string{"user1", "user2"},
+	},
+	expectError: `bad type \*struct { F1 \[\]string "httprequest:\\"users,path\\"" }: invalid target type \[\]string for path parameter`,
+}, {
 	about:     "[]string field fails to marshal to path",
 	urlString: "http://localhost:8081/user/:users",
 	val: &struct {
@@ -247,7 +256,16 @@ var marshalTests = []struct {
 	},
 	expectURLString: "http://localhost:8081/u/test",
 }, {
-	about:     "* placeholder allowed only at the ned",
+	about:     "marshal to path with * placeholder, but the marshaled value does not start with /",
+	urlString: "http://localhost:8081/u/*name",
+	val: &struct {
+		F1 string `httprequest:"name,path"`
+	}{
+		F1: "test",
+	},
+	expectError: `value \"test\" for path parameter \"\*name\" does not start with required /`,
+}, {
+	about:     "* placeholder allowed only at the end",
 	urlString: "http://localhost:8081/u/*name/document",
 	val: &struct {
 		F1 string `httprequest:"name,path"`
@@ -255,6 +273,25 @@ var marshalTests = []struct {
 		F1: "test",
 	},
 	expectError: "star path parameter is not at end of path",
+}, {
+	about:     "unparsable base url string",
+	urlString: "%%",
+	val: &struct {
+		F1 string `httprequest:"name,form"`
+	}{
+		F1: "test",
+	},
+	expectError: `parse %%: invalid URL escape \"%%\"`,
+}, {
+	about:     "value cannot be marshaled to json",
+	urlString: "http://localhost",
+	method:    "POST",
+	val: &struct {
+		F1 failJSONMarshaler `httprequest:"field,body"`
+	}{
+		F1: "test",
+	},
+	expectError: `cannot marshal field: cannot marshal request body: json: error calling MarshalJSON for type \*httprequest_test.failJSONMarshaler: marshal error`,
 },
 }
 
@@ -307,4 +344,10 @@ type notTextMarshaler string
 // MarshalText does *not* implement encoding.TextMarshaler
 func (t *notTextMarshaler) MarshalText() {
 	panic("unexpected call")
+}
+
+type failJSONMarshaler string
+
+func (*failJSONMarshaler) MarshalJSON() ([]byte, error) {
+	return nil, errgo.New("marshal error")
 }

@@ -26,6 +26,11 @@ import (
 //  baseURL will be filled out from "path"-tagged fields in x to form the
 //  URL path in the returned request.  These are specified as for httprouter.
 //
+//  If a field in baseURL is a suffix of the form "*var" (a trailing wildcard element
+//  that holds the rest of the path), the marshaled string must begin with a "/".
+//  This matches the httprouter convention that it always returns such fields
+//  with a "/" prefix.
+//
 //  If a field is of type string or []string, the value of the field will
 //  be used directly; otherwise if implements encoding.TextMarshaler, that
 //  will be used to marshal the field, otherwise fmt.Sprint will be used.
