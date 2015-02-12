@@ -32,14 +32,15 @@ import (
 //
 //  For example, this code:
 //
-//      type UserDetails struct {
-//          Age int
-//      }
-//       type Test struct {
-//          Username string `httprequest:"user,path"`
-//          ContextId int64 `httprequest:"context,form"`
-//          Details UserDetails `httprequest:",body"`
-//      }
+//  type UserDetails struct {
+//      Age int
+//  }
+//
+//  type Test struct {
+//      Username string `httprequest:"user,path"`
+//      ContextId int64 `httprequest:"context,form"`
+//      Details UserDetails `httprequest:",body"`
+//  }
 //  req, err := Marshal("GET", "http://example.com/users/:user/details", &Test{
 //      Username: "bob",
 //      ContextId: 1234,
@@ -194,7 +195,7 @@ func marshalNop(v reflect.Value, p *Params) error {
 func marshalBody(v reflect.Value, p *Params) error {
 	// TODO allow body types that aren't necessarily JSON.
 	if p.Method == "GET" || p.Method == "HEAD" {
-		return errgo.Newf("trying to marshal to body of a request with method %q", p.Method)
+		return errgo.Newf("cannot specify a body with %s method", p.Method)
 	}
 
 	data, err := json.Marshal(v.Addr().Interface())

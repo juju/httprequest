@@ -209,7 +209,7 @@ var marshalTests = []struct {
 	}{
 		F1: "hello test",
 	},
-	expectError: "cannot marshal field: trying to marshal to body of a request with method \"GET\"",
+	expectError: "cannot marshal field: cannot specify a body with GET method",
 }, {
 	about:     "marshal to nil value to body",
 	urlString: "http://localhost:8081/u",
