@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"mime"
 	"net/http"
 	"reflect"
 	"sort"
@@ -45,6 +46,11 @@ type resultMaker func(reflect.Value) reflect.Value
 // but passed to makeResult and then updated.
 type unmarshaler func(v reflect.Value, p Params, makeResult resultMaker) error
 
+// marshaler marshals the specified value into params.
+// The value is always the value type, even if the field type
+// is a pointer.
+type marshaler func(reflect.Value, *Params) error
+
 // requestType holds information derived from a request
 // type, preprocessed so that it's nice and quick to unmarshal.
 type requestType struct {
@@ -62,9 +68,17 @@ type field struct {
 	// argument is not a pointer type, but is addressable.
 	unmarshal unmarshaler
 
+	// marshal is used to marshal the value into the
+	// give filed. The value passed as its first argument is not
+	// a pointer type, but it is addressable.
+	marshal marshaler
+
 	// makeResult is the resultMaker that will be
 	// passed into the unmarshaler.
 	makeResult resultMaker
+
+	// isPointer is true if the field is pointer to the underlying type.
+	isPointer bool
 }
 
 var (
@@ -167,6 +181,7 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
 		return nil, fmt.Errorf("type is not pointer to struct")
 	}
+
 	hasBody := false
 	var pt requestType
 	for _, f := range fields(t.Elem()) {
@@ -193,14 +208,23 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 			// we need to create a new pointer to put
 			// it into.
 			field.makeResult = makePointerResult
+			field.isPointer = true
 			f.Type = f.Type.Elem()
 		} else {
 			field.makeResult = makeValueResult
+			field.isPointer = false
 		}
+
 		field.unmarshal, err = getUnmarshaler(tag, f.Type)
 		if err != nil {
 			return nil, errgo.Mask(err)
 		}
+
+		field.marshal, err = getMarshaler(tag, f.Type)
+		if err != nil {
+			return nil, errgo.Mask(err)
+		}
+
 		if f.Anonymous {
 			if tag.source != sourceBody && tag.source != sourceNone {
 				return nil, errgo.New("httprequest tag not yet supported on anonymous fields")
@@ -283,6 +307,13 @@ func unmarshalString(tag tag) unmarshaler {
 // unmarshalBody unmarshals the http request body
 // into the given value.
 func unmarshalBody(v reflect.Value, p Params, makeResult resultMaker) error {
+	mediaType, _, err := mime.ParseMediaType(p.Header.Get("Content-Type"))
+	if err != nil {
+		return errgo.Mask(err)
+	}
+	if mediaType != "application/json" {
+		return errgo.Newf("unexpected content type: expected \"application/json\", got %q", mediaType)
+	}
 	data, err := ioutil.ReadAll(p.Body)
 	if err != nil {
 		return errgo.Notef(err, "cannot read request body")

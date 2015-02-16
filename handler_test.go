@@ -55,6 +55,7 @@ var handleTests = []struct {
 		}
 	},
 	req: &http.Request{
+		Header: http.Header{"Content-Type": {"application/json"}},
 		Form: url.Values{
 			"c": {"43"},
 		},
