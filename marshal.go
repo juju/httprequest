@@ -18,44 +18,44 @@ import (
 	"gopkg.in/errgo.v1"
 )
 
-//  Marshal is the counterpart of Unmarshal. It takes information from
-//  x, which must be a pointer to a struct, and returns an HTTP request
-//  using the given method that holds all of the information
+// Marshal is the counterpart of Unmarshal. It takes information from
+// x, which must be a pointer to a struct, and returns an HTTP request
+// using the given method that holds all of the information
 //
-//  The HTTP request will use the given method.  Named fields in the given
-//  baseURL will be filled out from "path"-tagged fields in x to form the
-//  URL path in the returned request.  These are specified as for httprouter.
+// The HTTP request will use the given method.  Named fields in the given
+// baseURL will be filled out from "path"-tagged fields in x to form the
+// URL path in the returned request.  These are specified as for httprouter.
 //
-//  If a field in baseURL is a suffix of the form "*var" (a trailing wildcard element
-//  that holds the rest of the path), the marshaled string must begin with a "/".
-//  This matches the httprouter convention that it always returns such fields
-//  with a "/" prefix.
+// If a field in baseURL is a suffix of the form "*var" (a trailing wildcard element
+// that holds the rest of the path), the marshaled string must begin with a "/".
+// This matches the httprouter convention that it always returns such fields
+// with a "/" prefix.
 //
-//  If a field is of type string or []string, the value of the field will
-//  be used directly; otherwise if implements encoding.TextMarshaler, that
-//  will be used to marshal the field, otherwise fmt.Sprint will be used.
+// If a field is of type string or []string, the value of the field will
+// be used directly; otherwise if implements encoding.TextMarshaler, that
+// will be used to marshal the field, otherwise fmt.Sprint will be used.
 //
-//  For example, this code:
+// For example, this code:
 //
-//  type UserDetails struct {
-//      Age int
-//  }
+//	type UserDetails struct {
+//	    Age int
+//	}
 //
-//  type Test struct {
-//      Username string `httprequest:"user,path"`
-//      ContextId int64 `httprequest:"context,form"`
-//      Details UserDetails `httprequest:",body"`
-//  }
-//  req, err := Marshal("GET", "http://example.com/users/:user/details", &Test{
-//      Username: "bob",
-//      ContextId: 1234,
-//      Details: UserDetails{
-//          Age: 36,
-//      }
-//  })
-//  if err != nil {
-//      ...
-//  }
+//	type Test struct {
+//	    Username string `httprequest:"user,path"`
+//	    ContextId int64 `httprequest:"context,form"`
+//	    Details UserDetails `httprequest:",body"`
+//	}
+//	req, err := Marshal("GET", "http://example.com/users/:user/details", &Test{
+//	    Username: "bob",
+//	    ContextId: 1234,
+//	    Details: UserDetails{
+//	        Age: 36,
+//	    }
+//	})
+//	if err != nil {
+//	    ...
+//	}
 //
 // will produce an HTTP request req with a URL of
 // http://example.com/users/bob/details?context=1234 and a JSON-encoded
@@ -74,11 +74,9 @@ func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 		return nil, errgo.Mask(err)
 	}
 	req.Form = url.Values{}
-
 	p := &Params{
 		Request: req,
 	}
-
 	if err := marshal(p, xv, pt); err != nil {
 		return nil, errgo.Mask(err, errgo.Is(ErrUnmarshal))
 	}
@@ -88,10 +86,8 @@ func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 // marshal is the internal version of Marshal.
 func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 	xv = xv.Elem()
-
 	for _, f := range pt.fields {
 		fv := xv.FieldByIndex(f.index)
-
 		if f.isPointer {
 			if fv.IsNil() {
 				continue
@@ -104,15 +100,12 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 			return errgo.WithCausef(err, ErrUnmarshal, "cannot marshal field")
 		}
 	}
-
 	path, err := buildPath(p.URL.Path, p.PathVar)
 	if err != nil {
 		return errgo.Mask(err)
 	}
-
 	p.URL.Path = path
 	p.URL.RawQuery = p.Form.Encode()
-
 	return nil
 }
 
@@ -202,7 +195,6 @@ func marshalBody(v reflect.Value, p *Params) error {
 	if p.Method == "GET" || p.Method == "HEAD" {
 		return errgo.Newf("cannot specify a body with %s method", p.Method)
 	}
-
 	data, err := json.Marshal(v.Addr().Interface())
 	if err != nil {
 		return errgo.Notef(err, "cannot marshal request body")

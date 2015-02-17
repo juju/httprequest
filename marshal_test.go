@@ -149,7 +149,7 @@ var marshalTests = []struct {
 	}{
 		F1: []string{"user1", "user2", "user3"},
 	},
-	expectError: ".*invalid target type.*",
+	expectError: "bad type .*: invalid target type.*",
 }, {
 	about:     "more than one field with body tag",
 	urlString: "http://localhost:8081/user",
@@ -161,7 +161,7 @@ var marshalTests = []struct {
 		F1: "test user",
 		F2: 42,
 	},
-	expectError: ".*more than one body field specified",
+	expectError: "bad type .*: more than one body field specified",
 }, {
 	about:     "required path parameter, but not specified",
 	urlString: "http://localhost:8081/u/:username",
@@ -171,7 +171,7 @@ var marshalTests = []struct {
 	}{
 		F1: "test user",
 	},
-	expectError: "missing value for path parameter \"username\"",
+	expectError: `missing value for path parameter "username"`,
 }, {
 	about:     "marshal to body",
 	urlString: "http://localhost:8081/u",
@@ -185,7 +185,7 @@ var marshalTests = []struct {
 			F3: newString("test address"),
 		},
 	},
-	expectBody: newString("{\"name\":\"test user\",\"age\":42,\"address\":\"test address\"}"),
+	expectBody: newString(`{"name":"test user","age":42,"address":"test address"}`),
 }, {
 	about:     "empty path wildcard",
 	urlString: "http://localhost:8081/u/:",
