@@ -6,10 +6,10 @@ package httprequest_test
 import (
 	"io/ioutil"
 
-	"github.com/juju/httprequest"
-
 	gc "gopkg.in/check.v1"
 	"gopkg.in/errgo.v1"
+
+	"github.com/juju/httprequest"
 )
 
 type marshalSuite struct{}

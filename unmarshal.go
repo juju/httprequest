@@ -114,7 +114,7 @@ func unmarshalNop(v reflect.Value, p Params, makeResult resultMaker) error {
 // attribute into a []string slice.
 func unmarshalAllField(name string) unmarshaler {
 	return func(v reflect.Value, p Params, makeResult resultMaker) error {
-		vals := p.Form[name]
+		vals := p.Request.Form[name]
 		if len(vals) > 0 {
 			makeResult(v).Set(reflect.ValueOf(vals))
 		}
@@ -140,14 +140,14 @@ func unmarshalString(tag tag) unmarshaler {
 // unmarshalBody unmarshals the http request body
 // into the given value.
 func unmarshalBody(v reflect.Value, p Params, makeResult resultMaker) error {
-	mediaType, _, err := mime.ParseMediaType(p.Header.Get("Content-Type"))
+	mediaType, _, err := mime.ParseMediaType(p.Request.Header.Get("Content-Type"))
 	if err != nil {
 		return errgo.Mask(err)
 	}
 	if mediaType != "application/json" {
 		return errgo.Newf("unexpected content type: expected \"application/json\", got %q", mediaType)
 	}
-	data, err := ioutil.ReadAll(p.Body)
+	data, err := ioutil.ReadAll(p.Request.Body)
 	if err != nil {
 		return errgo.Notef(err, "cannot read request body")
 	}
@@ -164,7 +164,7 @@ func unmarshalBody(v reflect.Value, p Params, makeResult resultMaker) error {
 // whether the value was found.
 var formGetters = []func(name string, p Params) (string, bool){
 	sourceForm: func(name string, p Params) (string, bool) {
-		vs := p.Form[name]
+		vs := p.Request.Form[name]
 		if len(vs) == 0 {
 			return "", false
 		}

@@ -12,11 +12,11 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/juju/httprequest"
-
 	jc "github.com/juju/testing/checkers"
 	"github.com/julienschmidt/httprouter"
 	gc "gopkg.in/check.v1"
+
+	"github.com/juju/httprequest"
 )
 
 type testSuite struct{}
