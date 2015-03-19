@@ -28,11 +28,11 @@ var (
 	typeMap   = make(map[reflect.Type]*requestType)
 )
 
-// Params holds request parameters that can
-// be unmarshaled into a struct.
+// Params holds the parameters provided to an HTTP request.
 type Params struct {
-	*http.Request
-	PathVar httprouter.Params
+	Response http.ResponseWriter
+	Request  *http.Request
+	PathVar  httprouter.Params
 }
 
 // resultMaker is provided to the unmarshal functions.

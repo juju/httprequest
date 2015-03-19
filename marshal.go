@@ -100,12 +100,12 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 			return errgo.WithCausef(err, ErrUnmarshal, "cannot marshal field")
 		}
 	}
-	path, err := buildPath(p.URL.Path, p.PathVar)
+	path, err := buildPath(p.Request.URL.Path, p.PathVar)
 	if err != nil {
 		return errgo.Mask(err)
 	}
-	p.URL.Path = path
-	p.URL.RawQuery = p.Form.Encode()
+	p.Request.URL.Path = path
+	p.Request.URL.RawQuery = p.Request.Form.Encode()
 	return nil
 }
 
@@ -192,22 +192,22 @@ func marshalNop(v reflect.Value, p *Params) error {
 // mashalBody marshals the specified value into the body of the http request.
 func marshalBody(v reflect.Value, p *Params) error {
 	// TODO allow body types that aren't necessarily JSON.
-	if p.Method == "GET" || p.Method == "HEAD" {
-		return errgo.Newf("cannot specify a body with %s method", p.Method)
+	if p.Request.Method == "GET" || p.Request.Method == "HEAD" {
+		return errgo.Newf("cannot specify a body with %s method", p.Request.Method)
 	}
 	data, err := json.Marshal(v.Addr().Interface())
 	if err != nil {
 		return errgo.Notef(err, "cannot marshal request body")
 	}
-	p.Body = ioutil.NopCloser(bytes.NewReader(data))
-	p.Header.Set("Content-Type", "application/json")
+	p.Request.Body = ioutil.NopCloser(bytes.NewReader(data))
+	p.Request.Header.Set("Content-Type", "application/json")
 	return nil
 }
 
 // marshalAllField marshals a []string slice into form fields.
 func marshalAllField(name string) marshaler {
 	return func(v reflect.Value, p *Params) error {
-		p.Form[name] = v.Interface().([]string)
+		p.Request.Form[name] = v.Interface().([]string)
 		return nil
 	}
 }
@@ -273,7 +273,7 @@ func marshalWithSprint(tag tag) marshaler {
 // sets the value for a given key.
 var formSetters = []func(string, string, *Params){
 	sourceForm: func(name, value string, p *Params) {
-		p.Form.Set(name, value)
+		p.Request.Form.Set(name, value)
 	},
 	sourcePath: func(name, value string, p *Params) {
 		p.PathVar = append(p.PathVar, httprouter.Param{Key: name, Value: value})

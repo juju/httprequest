@@ -29,9 +29,9 @@ var (
 // must be a struct type acceptable to Unmarshal and ResultT is a type
 // that can be marshaled as JSON:
 //
-//	func(w http.ResponseWriter, p Params, arg *ArgT)
-//	func(w http.ResponseWriter, p Params, arg *ArgT) error
-//	func(header http.Header, p Params, arg *ArgT) (ResultT, error)
+//	func(p Params, arg *ArgT)
+//	func(p Params, arg *ArgT) error
+//	func(p Params, arg *ArgT) (ResultT, error)
 //
 // When processing a call to the returned handler, the provided
 // parameters are unmarshaled into a new ArgT value using Unmarshal,
@@ -43,7 +43,9 @@ var (
 // writing as a JSON response.
 //
 // In the third form, when no error is returned, the result is written
-// as a JSON response with status http.StatusOK.
+// as a JSON response with status http.StatusOK. In this case,
+// any calls to p.Response.Write and p.Response.WriteHeader
+// are ignored.
 //
 // Handle will panic if the provided function is not in one
 // of the above forms.
@@ -60,35 +62,22 @@ func checkHandleType(t reflect.Type) (*requestType, error) {
 	if t.Kind() != reflect.Func {
 		return nil, errgo.New("not a function")
 	}
-	if t.NumIn() != 3 {
-		return nil, errgo.Newf("function has %d parameters, need 3", t.NumIn())
+	if t.NumIn() != 2 {
+		return nil, errgo.Newf("has %d parameters, need 2", t.NumIn())
 	}
 	if t.NumOut() > 2 {
-		return nil, errgo.Newf("function has %d result parameters, need 0, 1 or 2", t.NumOut())
+		return nil, errgo.Newf("has %d result parameters, need 0, 1 or 2", t.NumOut())
 	}
-	// Second and third parameters are common to all three forms.
-	if t.In(1) != paramsType {
-		return nil, errgo.Newf("second argument is %s, need %s", t.In(1), paramsType)
+	if t.In(0) != paramsType {
+		return nil, errgo.Newf("first argument is %s, need %s", t.In(0), paramsType)
 	}
-	pt, err := getRequestType(t.In(2))
+	pt, err := getRequestType(t.In(1))
 	if err != nil {
-		return nil, errgo.Notef(err, "third argument cannot be used for Unmarshal")
-	}
-	if t.NumOut() < 2 {
-		//	func(w http.ResponseWriter, p Params, arg *ArgT)
-		//	func(w http.ResponseWriter, p Params, arg *ArgT) error
-		if t.In(0) != httpResponseWriterType {
-			return nil, errgo.Newf("first argument is %s, need http.ResponseWriter", t.In(0))
-		}
-	} else {
-		//	func(header http.Header, p Params, arg *ArgT) (ResultT, error)
-		if t.In(0) != httpHeaderType {
-			return nil, errgo.Newf("first argument is %s, need http.Header", t.In(0))
-		}
+		return nil, errgo.Notef(err, "second argument cannot be used for Unmarshal")
 	}
 	if t.NumOut() > 0 {
-		//	func(w http.ResponseWriter, p Params, arg *ArgT) error
-		//	func(header http.Header, p Params, arg *ArgT) (ResultT, error)
+		//	func(p Params, arg *ArgT) error
+		//	func(p Params, arg *ArgT) (ResultT, error)
 		if et := t.Out(t.NumOut() - 1); et != errorType {
 			return nil, errgo.Newf("final result parameter is %s, need error", et)
 		}
@@ -98,28 +87,25 @@ func checkHandleType(t reflect.Type) (*requestType, error) {
 
 func handleParams(fv reflect.Value, pt *requestType) func(w http.ResponseWriter, req *http.Request, p httprouter.Params) ([]reflect.Value, error) {
 	ft := fv.Type()
-	arg0IsHeader := ft.NumOut() == 2
-	argStructType := ft.In(2).Elem()
+	argStructType := ft.In(1).Elem()
+	returnJSON := ft.NumOut() > 1
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) ([]reflect.Value, error) {
 		if err := req.ParseForm(); err != nil {
 			return nil, errgo.WithCausef(err, ErrUnmarshal, "cannot parse HTTP request form")
 		}
+		if returnJSON {
+			w = headerOnlyResponseWriter{w.Header()}
+		}
 		params := Params{
-			Request: req,
-			PathVar: p,
+			Response: w,
+			Request:  req,
+			PathVar:  p,
 		}
 		pv := reflect.New(argStructType)
 		if err := unmarshal(params, pv, pt); err != nil {
 			return nil, errgo.NoteMask(err, "cannot unmarshal parameters", errgo.Is(ErrUnmarshal))
 		}
-		var arg0 reflect.Value
-		if arg0IsHeader {
-			arg0 = reflect.ValueOf(w.Header())
-		} else {
-			arg0 = reflect.ValueOf(w)
-		}
 		return fv.Call([]reflect.Value{
-			arg0,
 			reflect.ValueOf(params),
 			pv,
 		}), nil
@@ -184,37 +170,45 @@ func ToHTTP(h httprouter.Handle) http.Handler {
 // body (to be converted to JSON) and an error.
 // The Header parameter can be used to set
 // custom headers on the response.
-type JSONHandler func(http.Header, Params) (interface{}, error)
+type JSONHandler func(Params) (interface{}, error)
 
 // ErrorHandler is like httprouter.Handle except it returns an error
 // which may be returned as the error body of the response.
 // An ErrorHandler function should not itself write to the ResponseWriter
 // if it returns an error.
-type ErrorHandler func(http.ResponseWriter, Params) error
+type ErrorHandler func(Params) error
 
-// HandleJSON returns a handler that writes the return value
-// of handle as a JSON response. If handle returns an error,
-// it is passed through the error mapper.
+// HandleJSON returns a handler that writes the return value of handle
+// as a JSON response. If handle returns an error, it is passed through
+// the error mapper.
 func (e ErrorMapper) HandleJSON(handle JSONHandler) httprouter.Handle {
-	f := func(w http.ResponseWriter, p Params) error {
-		val, err := handle(w.Header(), p)
-		if err != nil {
-			return errgo.Mask(err, errgo.Any)
+	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
+		val, err := handle(Params{
+			Response: headerOnlyResponseWriter{w.Header()},
+			Request:  req,
+			PathVar:  p,
+		})
+		if err == nil {
+			if err = WriteJSON(w, http.StatusOK, val); err == nil {
+				return
+			}
 		}
-		return WriteJSON(w, http.StatusOK, val)
+		e.WriteError(w, err)
 	}
-	return e.HandleErrors(f)
 }
 
-// HandleErrors returns a handler that passes
-// any non-nil error returned by handle through the
-// error mapper and writes it as a JSON response.
+// HandleErrors returns a handler that passes any non-nil error returned
+// by handle through the error mapper and writes it as a JSON response.
 func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 		w1 := responseWriter{
 			ResponseWriter: w,
 		}
-		if err := handle(&w1, Params{req, p}); err != nil {
+		if err := handle(Params{
+			Response: &w1,
+			Request:  req,
+			PathVar:  p,
+		}); err != nil {
 			// We write the error only if the header hasn't
 			// already been written, because if it has, then
 			// we will not be able to set the appropriate error
@@ -281,4 +275,21 @@ func (w *responseWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+type headerOnlyResponseWriter struct {
+	h http.Header
+}
+
+func (w headerOnlyResponseWriter) Header() http.Header {
+	return w.h
+}
+
+func (w headerOnlyResponseWriter) Write([]byte) (int, error) {
+	// TODO log or panic when this happens?
+	return 0, errgo.New("inappropriate call to ResponseWriter.Write in JSON-returning handler")
+}
+
+func (w headerOnlyResponseWriter) WriteHeader(code int) {
+	// TODO log or panic when this happens?
 }
