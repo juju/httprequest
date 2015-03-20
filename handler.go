@@ -25,13 +25,17 @@ var (
 )
 
 // Handle converts a function into an httprouter.Handle. The argument f
-// must be a function of one of the following three forms, where ArgT
+// must be a function of one of the following six forms, where ArgT
 // must be a struct type acceptable to Unmarshal and ResultT is a type
 // that can be marshaled as JSON:
 //
 //	func(p Params, arg *ArgT)
 //	func(p Params, arg *ArgT) error
 //	func(p Params, arg *ArgT) (ResultT, error)
+//
+//	func(arg *ArgT)
+//	func(arg *ArgT) error
+//	func(arg *ArgT) (ResultT, error)
 //
 // When processing a call to the returned handler, the provided
 // parameters are unmarshaled into a new ArgT value using Unmarshal,
@@ -62,18 +66,24 @@ func checkHandleType(t reflect.Type) (*requestType, error) {
 	if t.Kind() != reflect.Func {
 		return nil, errgo.New("not a function")
 	}
-	if t.NumIn() != 2 {
-		return nil, errgo.Newf("has %d parameters, need 2", t.NumIn())
+	if t.NumIn() != 1 && t.NumIn() != 2 {
+		return nil, errgo.Newf("has %d parameters, need 1 or 2", t.NumIn())
 	}
 	if t.NumOut() > 2 {
 		return nil, errgo.Newf("has %d result parameters, need 0, 1 or 2", t.NumOut())
 	}
-	if t.In(0) != paramsType {
-		return nil, errgo.Newf("first argument is %s, need %s", t.In(0), paramsType)
+	if t.NumIn() == 2 {
+		if t.In(0) != paramsType {
+			return nil, errgo.Newf("first argument is %v, need httprequest.Params", t.In(0))
+		}
+	} else {
+		if t.In(0) == paramsType {
+			return nil, errgo.Newf("no argument parameter after Params argument")
+		}
 	}
-	pt, err := getRequestType(t.In(1))
+	pt, err := getRequestType(t.In(t.NumIn() - 1))
 	if err != nil {
-		return nil, errgo.Notef(err, "second argument cannot be used for Unmarshal")
+		return nil, errgo.Notef(err, "last argument cannot be used for Unmarshal")
 	}
 	if t.NumOut() > 0 {
 		//	func(p Params, arg *ArgT) error
@@ -87,29 +97,47 @@ func checkHandleType(t reflect.Type) (*requestType, error) {
 
 func handleParams(fv reflect.Value, pt *requestType) func(w http.ResponseWriter, req *http.Request, p httprouter.Params) ([]reflect.Value, error) {
 	ft := fv.Type()
-	argStructType := ft.In(1).Elem()
 	returnJSON := ft.NumOut() > 1
+	needsParams := ft.In(0) == paramsType
+	if needsParams {
+		argStructType := ft.In(1).Elem()
+		return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) ([]reflect.Value, error) {
+			if err := req.ParseForm(); err != nil {
+				return nil, errgo.WithCausef(err, ErrUnmarshal, "cannot parse HTTP request form")
+			}
+			if returnJSON {
+				w = headerOnlyResponseWriter{w.Header()}
+			}
+			params := Params{
+				Response: w,
+				Request:  req,
+				PathVar:  p,
+			}
+			pv := reflect.New(argStructType)
+			if err := unmarshal(params, pv, pt); err != nil {
+				return nil, errgo.NoteMask(err, "cannot unmarshal parameters", errgo.Is(ErrUnmarshal))
+			}
+			return fv.Call([]reflect.Value{
+				reflect.ValueOf(params),
+				pv,
+			}), nil
+		}
+	}
+	argStructType := ft.In(0).Elem()
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) ([]reflect.Value, error) {
 		if err := req.ParseForm(); err != nil {
 			return nil, errgo.WithCausef(err, ErrUnmarshal, "cannot parse HTTP request form")
 		}
-		if returnJSON {
-			w = headerOnlyResponseWriter{w.Header()}
-		}
-		params := Params{
-			Response: w,
-			Request:  req,
-			PathVar:  p,
-		}
 		pv := reflect.New(argStructType)
-		if err := unmarshal(params, pv, pt); err != nil {
+		if err := unmarshal(Params{
+			Request: req,
+			PathVar: p,
+		}, pv, pt); err != nil {
 			return nil, errgo.NoteMask(err, "cannot unmarshal parameters", errgo.Is(ErrUnmarshal))
 		}
-		return fv.Call([]reflect.Value{
-			reflect.ValueOf(params),
-			pv,
-		}), nil
+		return fv.Call([]reflect.Value{pv}), nil
 	}
+
 }
 
 func (e ErrorMapper) handleResult(ft reflect.Type, f func(w http.ResponseWriter, req *http.Request, p httprouter.Params) ([]reflect.Value, error)) httprouter.Handle {
