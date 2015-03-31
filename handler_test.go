@@ -144,12 +144,152 @@ var handleTests = []struct {
 	},
 	expectStatus: http.StatusUnauthorized,
 }, {
+	about: "function with value return that writes to p.Response",
+	f: func(c *gc.C) interface{} {
+		type testStruct struct {
+			A int `httprequest:"a,path"`
+		}
+		return func(p httprequest.Params, s *testStruct) (int, error) {
+			_, err := p.Response.Write(nil)
+			c.Assert(err, gc.ErrorMatches, "inappropriate call to ResponseWriter.Write in JSON-returning handler")
+			p.Response.WriteHeader(http.StatusTeapot)
+			c.Assert(s, jc.DeepEquals, &testStruct{123})
+			return 1234, nil
+		}
+	},
+	req: &http.Request{},
+	pathVar: httprouter.Params{{
+		Key:   "a",
+		Value: "123",
+	}},
+	expectBody: 1234,
+}, {
+	about: "function with no Params and no return",
+	f: func(c *gc.C) interface{} {
+		type testStruct struct {
+			A string         `httprequest:"a,path"`
+			B map[string]int `httprequest:",body"`
+			C int            `httprequest:"c,form"`
+		}
+		return func(s *testStruct) {
+			c.Assert(s, jc.DeepEquals, &testStruct{
+				A: "A",
+				B: map[string]int{"hello": 99},
+				C: 43,
+			})
+		}
+	},
+	req: &http.Request{
+		Header: http.Header{"Content-Type": {"application/json"}},
+		Form: url.Values{
+			"c": {"43"},
+		},
+		Body: body(`{"hello": 99}`),
+	},
+	pathVar: httprouter.Params{{
+		Key:   "a",
+		Value: "A",
+	}},
+}, {
+	about: "function with no Params with error return that returns no error",
+	f: func(c *gc.C) interface{} {
+		type testStruct struct {
+			A int `httprequest:"a,path"`
+		}
+		return func(s *testStruct) error {
+			c.Assert(s, jc.DeepEquals, &testStruct{123})
+			return nil
+		}
+	},
+	req: &http.Request{},
+	pathVar: httprouter.Params{{
+		Key:   "a",
+		Value: "123",
+	}},
+}, {
+	about: "function with no Params with error return that returns an error",
+	f: func(c *gc.C) interface{} {
+		type testStruct struct {
+			A int `httprequest:"a,path"`
+		}
+		return func(s *testStruct) error {
+			c.Assert(s, jc.DeepEquals, &testStruct{123})
+			return errUnauth
+		}
+	},
+	req: &http.Request{},
+	pathVar: httprouter.Params{{
+		Key:   "a",
+		Value: "123",
+	}},
+	expectBody: errorResponse{
+		Message: errUnauth.Error(),
+	},
+	expectStatus: http.StatusUnauthorized,
+}, {
+	about: "function with no Params with value return that returns a value",
+	f: func(c *gc.C) interface{} {
+		type testStruct struct {
+			A int `httprequest:"a,path"`
+		}
+		return func(s *testStruct) (int, error) {
+			c.Assert(s, jc.DeepEquals, &testStruct{123})
+			return 1234, nil
+		}
+	},
+	req: &http.Request{},
+	pathVar: httprouter.Params{{
+		Key:   "a",
+		Value: "123",
+	}},
+	expectBody: 1234,
+}, {
+	about: "function with no Params with value return that returns an error",
+	f: func(c *gc.C) interface{} {
+		type testStruct struct {
+			A int `httprequest:"a,path"`
+		}
+		return func(s *testStruct) (int, error) {
+			c.Assert(s, jc.DeepEquals, &testStruct{123})
+			return 0, errUnauth
+		}
+	},
+	req: &http.Request{},
+	pathVar: httprouter.Params{{
+		Key:   "a",
+		Value: "123",
+	}},
+	expectBody: errorResponse{
+		Message: errUnauth.Error(),
+	},
+	expectStatus: http.StatusUnauthorized,
+}, {
 	about: "error when unmarshaling",
 	f: func(c *gc.C) interface{} {
 		type testStruct struct {
 			A int `httprequest:"a,path"`
 		}
 		return func(p httprequest.Params, s *testStruct) (int, error) {
+			c.Errorf("function should not have been called")
+			return 0, nil
+		}
+	},
+	req: &http.Request{},
+	pathVar: httprouter.Params{{
+		Key:   "a",
+		Value: "not a number",
+	}},
+	expectBody: errorResponse{
+		Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot parse "not a number" into int: expected integer`,
+	},
+	expectStatus: http.StatusBadRequest,
+}, {
+	about: "error when unmarshaling, no Params",
+	f: func(c *gc.C) interface{} {
+		type testStruct struct {
+			A int `httprequest:"a,path"`
+		}
+		return func(s *testStruct) (int, error) {
 			c.Errorf("function should not have been called")
 			return 0, nil
 		}
@@ -219,10 +359,10 @@ var handlePanicTests = []struct {
 	expect: "bad handler function: not a function",
 }, {
 	f:      func(httprequest.Params) {},
-	expect: "bad handler function: has 1 parameters, need 2",
+	expect: "bad handler function: no argument parameter after Params argument",
 }, {
 	f:      func(httprequest.Params, *struct{}, struct{}) {},
-	expect: "bad handler function: has 3 parameters, need 2",
+	expect: "bad handler function: has 3 parameters, need 1 or 2",
 }, {
 	f:      func(httprequest.Params, *struct{}) struct{} { return struct{}{} },
 	expect: "bad handler function: final result parameter is struct {}, need error",
@@ -241,13 +381,13 @@ var handlePanicTests = []struct {
 	expect: `bad handler function: first argument is \*http.Request, need httprequest.Params`,
 }, {
 	f:      func(httprequest.Params, struct{}) {},
-	expect: "bad handler function: second argument cannot be used for Unmarshal: type is not pointer to struct",
+	expect: "bad handler function: last argument cannot be used for Unmarshal: type is not pointer to struct",
 }, {
 	f: func(httprequest.Params, *struct {
 		A int `httprequest:"a,the-ether"`
 	}) {
 	},
-	expect: `bad handler function: second argument cannot be used for Unmarshal: bad tag "httprequest:\\"a,the-ether\\"" in field A: unknown tag flag "the-ether"`,
+	expect: `bad handler function: last argument cannot be used for Unmarshal: bad tag "httprequest:\\"a,the-ether\\"" in field A: unknown tag flag "the-ether"`,
 }, {
 	f:      func(httprequest.Params, *struct{}) (a, b, c struct{}) { return },
 	expect: `bad handler function: has 3 result parameters, need 0, 1 or 2`,
@@ -266,6 +406,17 @@ func (*handlerSuite) TestBadForm(c *gc.C) {
 	h := errorMapper.Handle(func(p httprequest.Params, _ *struct{}) {
 		c.Fatalf("shouldn't be called")
 	})
+	testBadForm(c, h)
+}
+
+func (*handlerSuite) TestBadFormNoParams(c *gc.C) {
+	h := errorMapper.Handle(func(_ *struct{}) {
+		c.Fatalf("shouldn't be called")
+	})
+	testBadForm(c, h)
+}
+
+func testBadForm(c *gc.C, h httprouter.Handle) {
 	rec := httptest.NewRecorder()
 	req := &http.Request{
 		Method: "POST",
