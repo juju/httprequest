@@ -146,7 +146,7 @@ func BenchmarkHandle2Fields(b *testing.B) {
 			panic("unreachable")
 		}
 		return results, nil
-	}))
+	}).Handle)
 }
 
 func BenchmarkHandle2FieldsUnmarshalOnly(b *testing.B) {
@@ -279,7 +279,7 @@ func BenchmarkHandle4Fields(b *testing.B) {
 			panic("unreachable")
 		}
 		return results, nil
-	}))
+	}).Handle)
 }
 
 func BenchmarkHandle4FieldsUnmarshalOnly(b *testing.B) {
@@ -330,7 +330,7 @@ func benchmarkHandle4Fields(b *testing.B, handle func(w http.ResponseWriter, req
 func BenchmarkHandle2StringFields(b *testing.B) {
 	benchmarkHandleNFields(b, 2, errorMapper.Handle(func(p httprequest.Params, arg *testParams2StringFields) error {
 		return nil
-	}))
+	}).Handle)
 }
 
 func BenchmarkHandle2StringFieldsUnmarshalOnly(b *testing.B) {
@@ -352,7 +352,7 @@ func BenchmarkHandle2StringFieldsTrad(b *testing.B) {
 func BenchmarkHandle4StringFields(b *testing.B) {
 	benchmarkHandleNFields(b, 4, errorMapper.Handle(func(p httprequest.Params, arg *testParams4StringFields) error {
 		return nil
-	}))
+	}).Handle)
 }
 
 func BenchmarkHandle4StringFieldsUnmarshalOnly(b *testing.B) {
@@ -376,7 +376,7 @@ func BenchmarkHandle4StringFieldsTrad(b *testing.B) {
 func BenchmarkHandle8StringFields(b *testing.B) {
 	benchmarkHandleNFields(b, 8, errorMapper.Handle(func(p httprequest.Params, arg *testParams8StringFields) error {
 		return nil
-	}))
+	}).Handle)
 }
 
 func BenchmarkHandle8StringFieldsUnmarshalOnly(b *testing.B) {
@@ -404,7 +404,7 @@ func BenchmarkHandle8StringFieldsTrad(b *testing.B) {
 func BenchmarkHandle16StringFields(b *testing.B) {
 	benchmarkHandleNFields(b, 16, errorMapper.Handle(func(p httprequest.Params, arg *testParams16StringFields) error {
 		return nil
-	}))
+	}).Handle)
 }
 
 func BenchmarkHandle16StringFieldsUnmarshalOnly(b *testing.B) {

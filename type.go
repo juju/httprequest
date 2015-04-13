@@ -28,6 +28,11 @@ var (
 	typeMap   = make(map[reflect.Type]*requestType)
 )
 
+// Route is the type of a field that specifies a routing
+// path and HTTP method. See Marshal and Unmarshal
+// for details.
+type Route struct{}
+
 // Params holds the parameters provided to an HTTP request.
 type Params struct {
 	Response http.ResponseWriter
@@ -52,8 +57,10 @@ type unmarshaler func(v reflect.Value, p Params, makeResult resultMaker) error
 type marshaler func(reflect.Value, *Params) error
 
 // requestType holds information derived from a request
-// type, preprocessed so that it's nice and quick to unmarshal.
+// type, preprocessed so that it's quick to unmarshal.
 type requestType struct {
+	method string
+	path   string
 	fields []field
 }
 
@@ -116,10 +123,20 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 
 	hasBody := false
 	var pt requestType
+	foundRoute := false
 	for _, f := range fields(t.Elem()) {
 		if f.PkgPath != "" {
 			// Ignore unexported fields (note that this
 			// does not apply to anonymous fields).
+			continue
+		}
+		if !foundRoute && f.Anonymous && f.Type == reflect.TypeOf(Route{}) {
+			var err error
+			pt.method, pt.path, err = parseRouteTag(f.Tag)
+			if err != nil {
+				return nil, errgo.Notef(err, "bad route tag %q", f.Tag)
+			}
+			foundRoute = true
 			continue
 		}
 		tag, err := parseTag(f.Tag, f.Name)
@@ -165,6 +182,33 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 		pt.fields = append(pt.fields, field)
 	}
 	return &pt, nil
+}
+
+// Note: we deliberately omit HEAD and OPTIONS
+// from this list. HEAD will be routed through GET handlers
+// and OPTIONS is handled separately.
+var validMethod = map[string]bool{
+	"PUT":    true,
+	"POST":   true,
+	"DELETE": true,
+	"GET":    true,
+	"PATCH":  true,
+}
+
+func parseRouteTag(tag reflect.StructTag) (method, path string, err error) {
+	tagStr := tag.Get("httprequest")
+	if tagStr == "" {
+		return "", "", errgo.New("no httprequest tag")
+	}
+	f := strings.Fields(tagStr)
+	if len(f) != 2 {
+		return "", "", errgo.New("wrong field count")
+	}
+	if !validMethod[f[0]] {
+		return "", "", errgo.Newf("invalid method")
+	}
+	// TODO check that path looks valid
+	return f[0], f[1], nil
 }
 
 func makePointerResult(v reflect.Value) reflect.Value {

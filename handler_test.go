@@ -28,6 +28,8 @@ var handleTests = []struct {
 	f            func(c *gc.C) interface{}
 	req          *http.Request
 	pathVar      httprouter.Params
+	expectMethod string
+	expectPath   string
 	expectBody   interface{}
 	expectStatus int
 }{{
@@ -336,14 +338,34 @@ var handleTests = []struct {
 		Message: "json: unsupported type: map[int]int",
 	},
 	expectStatus: http.StatusInternalServerError,
+}, {
+	about: "argument with route",
+	f: func(c *gc.C) interface{} {
+		type testStruct struct {
+			httprequest.Route `httprequest:"GET /foo/:bar"`
+			A                 string `httprequest:"bar,path"`
+		}
+		return func(s *testStruct) {
+			c.Check(s.A, gc.Equals, "val")
+		}
+	},
+	req: &http.Request{},
+	pathVar: httprouter.Params{{
+		Key:   "bar",
+		Value: "val",
+	}},
+	expectMethod: "GET",
+	expectPath:   "/foo/:bar",
 }}
 
 func (*handlerSuite) TestHandle(c *gc.C) {
 	for i, test := range handleTests {
 		c.Logf("%d: %s", i, test.about)
 		h := errorMapper.Handle(test.f(c))
+		c.Assert(h.Method, gc.Equals, test.expectMethod)
+		c.Assert(h.Path, gc.Equals, test.expectPath)
 		rec := httptest.NewRecorder()
-		h(rec, test.req, test.pathVar)
+		h.Handle(rec, test.req, test.pathVar)
 		if test.expectStatus == 0 {
 			test.expectStatus = http.StatusOK
 		}
@@ -391,6 +413,42 @@ var handlePanicTests = []struct {
 }, {
 	f:      func(httprequest.Params, *struct{}) (a, b, c struct{}) { return },
 	expect: `bad handler function: has 3 result parameters, need 0, 1 or 2`,
+}, {
+	f: func(*struct {
+		httprequest.Route
+	}) {
+	},
+	expect: `bad handler function: last argument cannot be used for Unmarshal: bad route tag "": no httprequest tag`,
+}, {
+	f: func(*struct {
+		httprequest.Route `othertag:"foo"`
+	}) {
+	},
+	expect: `bad handler function: last argument cannot be used for Unmarshal: bad route tag "othertag:\\"foo\\"": no httprequest tag`,
+}, {
+	f: func(*struct {
+		httprequest.Route `httprequest:""`
+	}) {
+	},
+	expect: `bad handler function: last argument cannot be used for Unmarshal: bad route tag "httprequest:\\"\\"": no httprequest tag`,
+}, {
+	f: func(*struct {
+		httprequest.Route `httprequest:"GET"`
+	}) {
+	},
+	expect: `bad handler function: last argument cannot be used for Unmarshal: bad route tag "httprequest:\\"GET\\"": wrong field count`,
+}, {
+	f: func(*struct {
+		httprequest.Route `httprequest:"GET /foo /bar"`
+	}) {
+	},
+	expect: `bad handler function: last argument cannot be used for Unmarshal: bad route tag "httprequest:\\"GET /foo /bar\\"": wrong field count`,
+}, {
+	f: func(*struct {
+		httprequest.Route `httprequest:"BAD /foo"`
+	}) {
+	},
+	expect: `bad handler function: last argument cannot be used for Unmarshal: bad route tag "httprequest:\\"BAD /foo\\"": invalid method`,
 }}
 
 func (*handlerSuite) TestHandlePanicsWithBadFunctions(c *gc.C) {
@@ -402,18 +460,219 @@ func (*handlerSuite) TestHandlePanicsWithBadFunctions(c *gc.C) {
 	}
 }
 
+var handlersTests = []struct {
+	calledMethod string
+	callParams   httptesting.JSONCallParams
+}{{
+	calledMethod: "M1",
+	callParams: httptesting.JSONCallParams{
+		URL: "/m1/99",
+	},
+}, {
+	calledMethod: "M2",
+	callParams: httptesting.JSONCallParams{
+		URL:        "/m2/99",
+		ExpectBody: 999,
+	},
+}, {
+	calledMethod: "M3",
+	callParams: httptesting.JSONCallParams{
+		URL: "/m3/99",
+		ExpectBody: &errorResponse{
+			Message: "m3 error",
+		},
+		ExpectStatus: http.StatusInternalServerError,
+	},
+}, {
+	calledMethod: "M3Post",
+	callParams: httptesting.JSONCallParams{
+		Method: "POST",
+		URL:    "/m3/99",
+	},
+}}
+
+func (*handlerSuite) TestHandlers(c *gc.C) {
+	handleVal := testHandlers{
+		c: c,
+	}
+	f := func(p httprequest.Params) (*testHandlers, error) {
+		handleVal.p = p
+		return &handleVal, nil
+	}
+	handlers := errorMapper.Handlers(f)
+	handlers1 := make([]httprequest.Handler, len(handlers))
+	copy(handlers1, handlers)
+	for i := range handlers1 {
+		handlers1[i].Handle = nil
+	}
+	expectHandlers := []httprequest.Handler{{
+		Method: "GET",
+		Path:   "/m1/:p",
+	}, {
+		Method: "GET",
+		Path:   "/m2/:p",
+	}, {
+		Method: "GET",
+		Path:   "/m3/:p",
+	}, {
+		Method: "POST",
+		Path:   "/m3/:p",
+	}}
+	c.Assert(handlers1, jc.DeepEquals, expectHandlers)
+	c.Assert(handlersTests, gc.HasLen, len(expectHandlers))
+
+	router := httprouter.New()
+	for _, h := range handlers {
+		c.Logf("adding %s %s", h.Method, h.Path)
+		router.Handle(h.Method, h.Path, h.Handle)
+	}
+	for i, test := range handlersTests {
+		c.Logf("test %d: %s", i, test.calledMethod)
+		handleVal.calledMethod = ""
+		test.callParams.Handler = router
+		httptesting.AssertJSONCall(c, test.callParams)
+		c.Assert(handleVal.calledMethod, gc.Equals, test.calledMethod)
+	}
+}
+
+type testHandlers struct {
+	calledMethod string
+	c            *gc.C
+	p            httprequest.Params
+}
+
+func (h *testHandlers) M1(p httprequest.Params, arg *struct {
+	httprequest.Route `httprequest:"GET /m1/:p"`
+	P                 int `httprequest:"p,path"`
+}) {
+	h.calledMethod = "M1"
+	h.c.Check(arg.P, gc.Equals, 99)
+	h.c.Check(p.Response, gc.Equals, h.p.Response)
+	h.c.Check(p.Request, gc.Equals, h.p.Request)
+	h.c.Check(p.PathVar, gc.DeepEquals, h.p.PathVar)
+}
+
+func (h *testHandlers) M2(arg *struct {
+	httprequest.Route `httprequest:"GET /m2/:p"`
+	P                 int `httprequest:"p,path"`
+}) (int, error) {
+	h.calledMethod = "M2"
+	h.c.Check(arg.P, gc.Equals, 99)
+	return 999, nil
+}
+
+func (h *testHandlers) unexported() {
+}
+
+func (h *testHandlers) M3(arg *struct {
+	httprequest.Route `httprequest:"GET /m3/:p"`
+	P                 int `httprequest:"p,path"`
+}) (int, error) {
+	h.calledMethod = "M3"
+	h.c.Check(arg.P, gc.Equals, 99)
+	return 0, errgo.New("m3 error")
+}
+
+func (h *testHandlers) M3Post(arg *struct {
+	httprequest.Route `httprequest:"POST /m3/:p"`
+	P                 int `httprequest:"p,path"`
+}) {
+	h.calledMethod = "M3Post"
+	h.c.Check(arg.P, gc.Equals, 99)
+}
+
+var badHandlersFuncTests = []struct {
+	f           interface{}
+	expectPanic string
+}{{
+	f:           123,
+	expectPanic: "bad handler function: expected function, got int",
+}, {
+	f:           (func())(nil),
+	expectPanic: "bad handler function: function is nil",
+}, {
+	f:           func() {},
+	expectPanic: "bad handler function: got 0 arguments, want 1",
+}, {
+	f:           func(http.ResponseWriter, *http.Request) {},
+	expectPanic: "bad handler function: got 2 arguments, want 1",
+}, {
+	f:           func(httprequest.Params) {},
+	expectPanic: "bad handler function: function returns 0 values, want 2",
+}, {
+	f:           func(httprequest.Params) string { return "" },
+	expectPanic: "bad handler function: function returns 1 values, want 2",
+}, {
+	f:           func(httprequest.Params) (string, error, error) { return "", nil, nil },
+	expectPanic: "bad handler function: function returns 3 values, want 2",
+}, {
+	f:           func(string) (string, error) { return "", nil },
+	expectPanic: `bad handler function: invalid argument or return values, want func\(httprequest.Params\) \(any, error\), got func\(string\) \(string, error\)`,
+}, {
+	f:           func(httprequest.Params) (string, string) { return "", "" },
+	expectPanic: `bad handler function: invalid argument or return values, want func\(httprequest.Params\) \(any, error\), got func\(httprequest.Params\) \(string, string\)`,
+}, {
+	f:           func(httprequest.Params) (string, error) { return "", nil },
+	expectPanic: `no exported methods defined on string`,
+}, {
+	f:           func(httprequest.Params) (a badHandlersType1, b error) { return },
+	expectPanic: `bad type for method M: has 3 parameters, need 1 or 2`,
+}, {
+	f:           func(httprequest.Params) (a badHandlersType2, b error) { return },
+	expectPanic: `method M does not specify route method and path`,
+}}
+
+type badHandlersType1 struct{}
+
+func (badHandlersType1) M(a, b, c int) {
+}
+
+type badHandlersType2 struct{}
+
+func (badHandlersType2) M(*struct {
+	P int `httprequest:",path"`
+}) {
+}
+
+func (*handlerSuite) TestBadHandlersFunc(c *gc.C) {
+	for i, test := range badHandlersFuncTests {
+		c.Logf("test %d: %s", i, test.expectPanic)
+		c.Check(func() {
+			errorMapper.Handlers(test.f)
+		}, gc.PanicMatches, test.expectPanic)
+	}
+}
+
+func (*handlerSuite) TestHandlersFuncReturningError(c *gc.C) {
+	handlers := errorMapper.Handlers(func(httprequest.Params) (*testHandlers, error) {
+		return nil, errgo.WithCausef(errgo.New("failure"), errUnauth, "something")
+	})
+	router := httprouter.New()
+	for _, h := range handlers {
+		router.Handle(h.Method, h.Path, h.Handle)
+	}
+	httptesting.AssertJSONCall(c, httptesting.JSONCallParams{
+		URL:          "/m1/p",
+		Handler:      router,
+		ExpectStatus: http.StatusUnauthorized,
+		ExpectBody: &errorResponse{
+			Message: "something: failure",
+		},
+	})
+}
+
 func (*handlerSuite) TestBadForm(c *gc.C) {
 	h := errorMapper.Handle(func(p httprequest.Params, _ *struct{}) {
 		c.Fatalf("shouldn't be called")
 	})
-	testBadForm(c, h)
+	testBadForm(c, h.Handle)
 }
 
 func (*handlerSuite) TestBadFormNoParams(c *gc.C) {
 	h := errorMapper.Handle(func(_ *struct{}) {
 		c.Fatalf("shouldn't be called")
 	})
-	testBadForm(c, h)
+	testBadForm(c, h.Handle)
 }
 
 func testBadForm(c *gc.C, h httprouter.Handle) {
@@ -434,7 +693,7 @@ func (*handlerSuite) TestToHTTP(c *gc.C) {
 	h = httprequest.ToHTTP(errorMapper.Handle(func(p httprequest.Params, s *struct{}) {
 		c.Assert(p.PathVar, gc.IsNil)
 		p.Response.WriteHeader(http.StatusOK)
-	}))
+	}).Handle)
 	rec := httptest.NewRecorder()
 	req := &http.Request{
 		Body: body(""),
