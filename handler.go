@@ -5,6 +5,7 @@ package httprequest
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"reflect"
 
@@ -23,6 +24,7 @@ var (
 	httpResponseWriterType = reflect.TypeOf((*http.ResponseWriter)(nil)).Elem()
 	httpHeaderType         = reflect.TypeOf(http.Header(nil))
 	httpRequestType        = reflect.TypeOf((*http.Request)(nil))
+	ioCloserType           = reflect.TypeOf((*io.Closer)(nil)).Elem()
 )
 
 // Handle converts a function into a Handler. The argument f
@@ -87,29 +89,36 @@ func (e ErrorMapper) Handle(f interface{}) Handler {
 //
 // 	func(httprequest.Params) (T, error)
 //
-// for some type T. Each exported method defined on T
-// defines a handler, and should be in one
-// of the forms accepted by ErrorMapper.Handle.
+// for some type T. Each exported method defined on T defines a handler,
+// and should be in one of the forms accepted by ErrorMapper.Handle.
 //
-// Handlers will panic if f is not of the required form,
-// no methods are defined on T
-// or any method defined on T is not suitable for Handle.
+// Handlers will panic if f is not of the required form, no methods are
+// defined on T or any method defined on T is not suitable for Handle.
 //
-// When any of the returned handlers is invoked,
-// f will be called and then the appropriate method
-// will be called on the value it returns.
+// When any of the returned handlers is invoked, f will be called and
+// then the appropriate method will be called on the value it returns.
+//
+// If T implements io.Closer, its Close method will be called
+// after the request is completed.
 func (e ErrorMapper) Handlers(f interface{}) []Handler {
 	fv := reflect.ValueOf(f)
 	wt, err := checkHandlersWrapperFunc(fv)
 	if err != nil {
 		panic(errgo.Notef(err, "bad handler function"))
 	}
+	hasClose := wt.Implements(ioCloserType)
 	hs := make([]Handler, 0, wt.NumMethod())
 	numMethod := 0
 	for i := 0; i < wt.NumMethod(); i++ {
 		i := i
 		m := wt.Method(i)
 		if m.PkgPath != "" {
+			continue
+		}
+		if m.Name == "Close" {
+			if !hasClose {
+				panic(errgo.Newf("bad type for Close method (got %v want func(%v) error", m.Type, wt))
+			}
 			continue
 		}
 		// The type in the Method struct includes the receiver type,
@@ -137,11 +146,15 @@ func (e ErrorMapper) Handlers(f interface{}) []Handler {
 				e.WriteError(w, errv.Interface().(error))
 				return
 			}
+			if hasClose {
+				defer tv.Interface().(io.Closer).Close()
+			}
 			hf(tv.Method(i), Params{
 				Response: w,
 				Request:  req,
 				PathVar:  p,
 			})
+
 		}
 		hs = append(hs, Handler{
 			Method: rt.method,

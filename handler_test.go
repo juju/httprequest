@@ -620,6 +620,9 @@ var badHandlersFuncTests = []struct {
 }, {
 	f:           func(httprequest.Params) (a badHandlersType2, b error) { return },
 	expectPanic: `method M does not specify route method and path`,
+}, {
+	f:           func(httprequest.Params) (a badHandlersType3, b error) { return },
+	expectPanic: `bad type for Close method \(got func\(httprequest_test\.badHandlersType3\) want func\(httprequest_test.badHandlersType3\) error`,
 }}
 
 type badHandlersType1 struct{}
@@ -632,6 +635,17 @@ type badHandlersType2 struct{}
 func (badHandlersType2) M(*struct {
 	P int `httprequest:",path"`
 }) {
+}
+
+type badHandlersType3 struct{}
+
+func (badHandlersType3) M(arg *struct {
+	httprequest.Route `httprequest:"GET /m1/:P"`
+	P                 int `httprequest:",path"`
+}) {
+}
+
+func (badHandlersType3) Close() {
 }
 
 func (*handlerSuite) TestBadHandlersFunc(c *gc.C) {
@@ -659,6 +673,40 @@ func (*handlerSuite) TestHandlersFuncReturningError(c *gc.C) {
 			Message: "something: failure",
 		},
 	})
+}
+
+type closeHandlersType struct {
+	p      int
+	closed bool
+}
+
+func (h *closeHandlersType) M(arg *struct {
+	httprequest.Route `httprequest:"GET /m1/:P"`
+	P                 int `httprequest:",path"`
+}) {
+	h.p = arg.P
+}
+
+func (h *closeHandlersType) Close() error {
+	h.closed = true
+	return nil
+}
+
+func (*handlerSuite) TestHandlersWithTypeThatImplementsIOCloser(c *gc.C) {
+	var v closeHandlersType
+	handlers := errorMapper.Handlers(func(httprequest.Params) (*closeHandlersType, error) {
+		return &v, nil
+	})
+	router := httprouter.New()
+	for _, h := range handlers {
+		router.Handle(h.Method, h.Path, h.Handle)
+	}
+	httptesting.AssertJSONCall(c, httptesting.JSONCallParams{
+		URL:     "/m1/99",
+		Handler: router,
+	})
+	c.Assert(v.closed, gc.Equals, true)
+	c.Assert(v.p, gc.Equals, 99)
 }
 
 func (*handlerSuite) TestBadForm(c *gc.C) {
