@@ -104,8 +104,9 @@ var handleTests = []struct {
 		Key:   "a",
 		Value: "123",
 	}},
-	expectBody: errorResponse{
+	expectBody: httprequest.RemoteError{
 		Message: errUnauth.Error(),
+		Code:    "unauthorized",
 	},
 	expectStatus: http.StatusUnauthorized,
 }, {
@@ -141,8 +142,9 @@ var handleTests = []struct {
 		Key:   "a",
 		Value: "123",
 	}},
-	expectBody: errorResponse{
+	expectBody: httprequest.RemoteError{
 		Message: errUnauth.Error(),
+		Code:    "unauthorized",
 	},
 	expectStatus: http.StatusUnauthorized,
 }, {
@@ -224,8 +226,9 @@ var handleTests = []struct {
 		Key:   "a",
 		Value: "123",
 	}},
-	expectBody: errorResponse{
+	expectBody: httprequest.RemoteError{
 		Message: errUnauth.Error(),
+		Code:    "unauthorized",
 	},
 	expectStatus: http.StatusUnauthorized,
 }, {
@@ -261,8 +264,9 @@ var handleTests = []struct {
 		Key:   "a",
 		Value: "123",
 	}},
-	expectBody: errorResponse{
+	expectBody: httprequest.RemoteError{
 		Message: errUnauth.Error(),
+		Code:    "unauthorized",
 	},
 	expectStatus: http.StatusUnauthorized,
 }, {
@@ -281,8 +285,9 @@ var handleTests = []struct {
 		Key:   "a",
 		Value: "not a number",
 	}},
-	expectBody: errorResponse{
+	expectBody: httprequest.RemoteError{
 		Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot parse "not a number" into int: expected integer`,
+		Code:    "bad request",
 	},
 	expectStatus: http.StatusBadRequest,
 }, {
@@ -301,8 +306,9 @@ var handleTests = []struct {
 		Key:   "a",
 		Value: "not a number",
 	}},
-	expectBody: errorResponse{
+	expectBody: httprequest.RemoteError{
 		Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot parse "not a number" into int: expected integer`,
+		Code:    "bad request",
 	},
 	expectStatus: http.StatusBadRequest,
 }, {
@@ -321,8 +327,9 @@ var handleTests = []struct {
 		Key:   "a",
 		Value: "not a number",
 	}},
-	expectBody: errorResponse{
+	expectBody: httprequest.RemoteError{
 		Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot parse "not a number" into int: expected integer`,
+		Code:    "bad request",
 	},
 	expectStatus: http.StatusBadRequest,
 }, {
@@ -334,7 +341,7 @@ var handleTests = []struct {
 	},
 	req:     &http.Request{},
 	pathVar: httprouter.Params{},
-	expectBody: errorResponse{
+	expectBody: httprequest.RemoteError{
 		Message: "json: unsupported type: map[int]int",
 	},
 	expectStatus: http.StatusInternalServerError,
@@ -478,7 +485,7 @@ var handlersTests = []struct {
 	calledMethod: "M3",
 	callParams: httptesting.JSONCallParams{
 		URL: "/m3/99",
-		ExpectBody: &errorResponse{
+		ExpectBody: &httprequest.RemoteError{
 			Message: "m3 error",
 		},
 		ExpectStatus: http.StatusInternalServerError,
@@ -669,8 +676,9 @@ func (*handlerSuite) TestHandlersFuncReturningError(c *gc.C) {
 		URL:          "/m1/p",
 		Handler:      router,
 		ExpectStatus: http.StatusUnauthorized,
-		ExpectBody: &errorResponse{
+		ExpectBody: &httprequest.RemoteError{
 			Message: "something: failure",
+			Code:    "unauthorized",
 		},
 	})
 }
@@ -733,7 +741,10 @@ func testBadForm(c *gc.C, h httprouter.Handle) {
 		Body: body("%6"),
 	}
 	h(rec, req, httprouter.Params{})
-	httptesting.AssertJSONResponse(c, rec, http.StatusBadRequest, errorResponse{Message: `cannot parse HTTP request form: invalid URL escape "%6"`})
+	httptesting.AssertJSONResponse(c, rec, http.StatusBadRequest, httprequest.RemoteError{
+		Message: `cannot parse HTTP request form: invalid URL escape "%6"`,
+		Code:    "bad request",
+	})
 }
 
 func (*handlerSuite) TestToHTTP(c *gc.C) {
@@ -769,20 +780,18 @@ var (
 	errNil    = errors.New("nil result")
 )
 
-type errorResponse struct {
-	Message string
-}
-
 var errorMapper httprequest.ErrorMapper = func(err error) (int, interface{}) {
-	resp := &errorResponse{
+	resp := &httprequest.RemoteError{
 		Message: err.Error(),
 	}
 	status := http.StatusInternalServerError
 	switch errgo.Cause(err) {
 	case errUnauth:
 		status = http.StatusUnauthorized
+		resp.Code = "unauthorized"
 	case errBadReq, httprequest.ErrUnmarshal:
 		status = http.StatusBadRequest
+		resp.Code = "bad request"
 	case errNil:
 		return status, nil
 	}
@@ -792,23 +801,25 @@ var errorMapper httprequest.ErrorMapper = func(err error) (int, interface{}) {
 var writeErrorTests = []struct {
 	err          error
 	expectStatus int
-	expectResp   *errorResponse
+	expectResp   *httprequest.RemoteError
 }{{
 	err:          errUnauth,
 	expectStatus: http.StatusUnauthorized,
-	expectResp: &errorResponse{
+	expectResp: &httprequest.RemoteError{
 		Message: errUnauth.Error(),
+		Code:    "unauthorized",
 	},
 }, {
 	err:          errBadReq,
 	expectStatus: http.StatusBadRequest,
-	expectResp: &errorResponse{
+	expectResp: &httprequest.RemoteError{
 		Message: errBadReq.Error(),
+		Code:    "bad request",
 	},
 }, {
 	err:          errOther,
 	expectStatus: http.StatusInternalServerError,
-	expectResp: &errorResponse{
+	expectResp: &httprequest.RemoteError{
 		Message: errOther.Error(),
 	},
 }, {
@@ -827,8 +838,8 @@ func (s *handlerSuite) TestWriteError(c *gc.C) {
 	}
 }
 
-func parseErrorResponse(c *gc.C, body []byte) *errorResponse {
-	var errResp *errorResponse
+func parseErrorResponse(c *gc.C, body []byte) *httprequest.RemoteError {
+	var errResp *httprequest.RemoteError
 	err := json.Unmarshal(body, &errResp)
 	c.Assert(err, gc.IsNil)
 	return errResp
@@ -847,8 +858,9 @@ func (s *handlerSuite) TestHandleErrors(c *gc.C) {
 	handler(rec, req, params)
 	c.Assert(rec.Code, gc.Equals, http.StatusUnauthorized)
 	resp := parseErrorResponse(c, rec.Body.Bytes())
-	c.Assert(resp, gc.DeepEquals, &errorResponse{
+	c.Assert(resp, gc.DeepEquals, &httprequest.RemoteError{
 		Message: errUnauth.Error(),
+		Code:    "unauthorized",
 	})
 
 	// Test when handler returns nil.
@@ -911,8 +923,9 @@ func (s *handlerSuite) TestHandleJSON(c *gc.C) {
 	rec := httptest.NewRecorder()
 	handler(rec, new(http.Request), params)
 	resp := parseErrorResponse(c, rec.Body.Bytes())
-	c.Assert(resp, gc.DeepEquals, &errorResponse{
+	c.Assert(resp, gc.DeepEquals, &httprequest.RemoteError{
 		Message: errUnauth.Error(),
+		Code:    "unauthorized",
 	})
 	c.Assert(rec.Code, gc.Equals, http.StatusUnauthorized)
 

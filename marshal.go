@@ -8,7 +8,6 @@ import (
 	"encoding"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -18,9 +17,14 @@ import (
 	"gopkg.in/errgo.v1"
 )
 
+var emptyReader = bytes.NewReader(nil)
+
 // Marshal is the counterpart of Unmarshal. It takes information from
 // x, which must be a pointer to a struct, and returns an HTTP request
-// using the given method that holds all of the information
+// using the given method that holds all of the information.
+//
+// The Body field in the returned request will always be of type
+// BytesReaderCloser.
 //
 // The HTTP request will use the given method.  Named fields in the given
 // baseURL will be filled out from "path"-tagged fields in x to form the
@@ -69,7 +73,7 @@ func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 	if err != nil {
 		return nil, errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", xv.Type())
 	}
-	req, err := http.NewRequest(method, baseURL, bytes.NewBuffer(nil))
+	req, err := http.NewRequest(method, baseURL, BytesReaderCloser{emptyReader})
 	if err != nil {
 		return nil, errgo.Mask(err)
 	}
@@ -80,6 +84,7 @@ func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 	if err := marshal(p, xv, pt); err != nil {
 		return nil, errgo.Mask(err, errgo.Is(ErrUnmarshal))
 	}
+
 	return p.Request, nil
 }
 
@@ -199,7 +204,8 @@ func marshalBody(v reflect.Value, p *Params) error {
 	if err != nil {
 		return errgo.Notef(err, "cannot marshal request body")
 	}
-	p.Request.Body = ioutil.NopCloser(bytes.NewReader(data))
+	p.Request.Body = BytesReaderCloser{bytes.NewReader(data)}
+	p.Request.ContentLength = int64(len(data))
 	p.Request.Header.Set("Content-Type", "application/json")
 	return nil
 }
@@ -279,4 +285,15 @@ var formSetters = []func(string, string, *Params){
 		p.PathVar = append(p.PathVar, httprouter.Param{Key: name, Value: value})
 	},
 	sourceBody: nil,
+}
+
+// BytesReaderCloser is a bytes.Reader which
+// implements io.Closer with a no-op Close method.
+type BytesReaderCloser struct {
+	*bytes.Reader
+}
+
+// Close implements io.Closer.Close.
+func (BytesReaderCloser) Close() error {
+	return nil
 }
