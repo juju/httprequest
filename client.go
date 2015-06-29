@@ -96,7 +96,8 @@ func (c *Client) Call(params, resp interface{}) error {
 	}
 	var httpResp *http.Response
 	body := req.Body.(BytesReaderCloser)
-	if doer1, ok := doer.(DoerWithBody); ok && body.Len() > 0 {
+	// Always use DoWithBody when available.
+	if doer1, ok := doer.(DoerWithBody); ok {
 		req.Body = nil
 		httpResp, err = doer1.DoWithBody(req, body)
 	} else {

@@ -89,11 +89,11 @@ var callTests = []struct {
 	},
 	expectResp: &chM2Resp{"hello", 999},
 }, {
-	about: "doer with body but no body",
+	about: "doer that implements DoWithBody but no body",
 	client: httprequest.Client{
 		Doer: doerFunc(func(req *http.Request, body io.ReadSeeker) (*http.Response, error) {
-			if body != nil {
-				panic("DoWithBody called unexpectedly")
+			if body == nil {
+				panic("Do called but DoWithBody should always be called")
 			}
 			return http.DefaultClient.Do(req)
 		}),
