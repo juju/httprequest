@@ -243,8 +243,8 @@ func typeStr0(t types.Type, imports map[string]string) string {
 		return "*" + typeStr0(t.Elem(), imports)
 	case *types.Map:
 		return fmt.Sprintf("map[%s]%s",
-			typeStr0(t.Elem(), imports),
 			typeStr0(t.Key(), imports),
+			typeStr0(t.Elem(), imports),
 		)
 	case *types.Slice:
 		return "[]" + typeStr0(t.Elem(), imports)
