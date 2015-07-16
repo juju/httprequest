@@ -4,18 +4,14 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"go/ast"
 	"go/build"
 	"go/format"
-	"go/parser"
-	"go/token"
 	"io/ioutil"
 	"os"
-	"os/exec"
 	"strings"
 	"text/template"
 
-	_ "golang.org/x/tools/go/gcimporter"
+	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/types"
 	"gopkg.in/errgo.v1"
 )
@@ -134,10 +130,23 @@ type method struct {
 }
 
 func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
-	pkg, err := typeCheck(serverPkg)
-	if err != nil {
-		return nil, nil, err
+	cfg := loader.Config{
+		TypeCheckFuncBodies: func(string) bool {
+			return false
+		},
+		ImportPkgs: map[string]bool{
+			serverPkg: false, // false means don't load tests.
+		},
 	}
+	prog, err := cfg.Load()
+	if err != nil {
+		return nil, nil, errgo.Notef(err, "cannot load %q", serverPkg)
+	}
+	pkgInfo := prog.Imported[serverPkg]
+	if pkgInfo == nil {
+		return nil, nil, errgo.Newf("cannot find %q in imported code", serverPkg)
+	}
+	pkg := pkgInfo.Pkg
 	obj := pkg.Scope().Lookup(serverType)
 	if obj == nil {
 		return nil, nil, errgo.Newf("type %s not found in %s", serverType, serverPkg)
@@ -168,19 +177,10 @@ func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
 			fmt.Fprintf(os.Stderr, "ignoring method %s: %v\n", name, err)
 			continue
 		}
-		ptypeStr, err := typeStr(ptype, imports)
-		if err != nil {
-			return nil, nil, errgo.Notef(err, "cannot generate type for method %s parameter", name)
-		}
-		rtypeStr, err := typeStr(rtype, imports)
-		if err != nil {
-			return nil, nil, errgo.Notef(err, "cannot generate type for method %s response", name)
-			return nil, nil, err
-		}
 		methods = append(methods, method{
 			Name:      name,
-			ParamType: ptypeStr,
-			RespType:  rtypeStr,
+			ParamType: typeStr(ptype, imports),
+			RespType:  typeStr(rtype, imports),
 		})
 	}
 	var allImports []string
@@ -190,74 +190,29 @@ func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
 	return methods, allImports, nil
 }
 
-type typeStrError struct {
-	error
-}
-
-func typeStrPanic(err error) {
-	panic(&typeStrError{err})
-}
-
 // typeStr returns the type string to be used when using the
 // given type. It adds any needed import paths to the given
 // imports map (map from package path to package id).
-// TODO fix the case when two packages declare the same id.
-func typeStr(t types.Type, imports map[string]string) (_ string, err error) {
+func typeStr(t types.Type, imports map[string]string) string {
 	if t == nil {
-		return "", nil
+		return ""
 	}
-	defer func() {
-		rerr := recover()
-		if rerr == nil {
-			return
+	qualify := func(pkg *types.Package) string {
+		if name := imports[pkg.Path()]; name != "" {
+			return name
 		}
-		rerr1, ok := rerr.(*typeStrError)
-		if !ok {
-			panic(rerr)
-		}
-		err = rerr1.error
-	}()
-	return typeStr0(t, imports), nil
-}
-
-// typeStr0 is the recursive version of typeStr.
-// It panics with *typeStrError on error.
-func typeStr0(t types.Type, imports map[string]string) string {
-	switch t := t.(type) {
-	case *types.Named:
-		if !t.Obj().Exported() {
-			typeStrPanic(errgo.Newf("type %s is not exported", t))
-		}
-		path := t.Obj().Pkg().Path()
-		id := imports[path]
-		if id == "" {
-			pkg, err := build.Import(path, ".", 0)
-			if err != nil {
-				typeStrPanic(err)
+		name := pkg.Name()
+		// Make sure we're not duplicating the name.
+		// TODO if we are, make a new non-duplicated version.
+		for oldPkg, oldName := range imports {
+			if oldName == name {
+				panic(errgo.Newf("duplicate package name %s vs %s", pkg.Path(), oldPkg))
 			}
-			id = pkg.Name
-			imports[path] = id
 		}
-		return id + "." + t.Obj().Name()
-	case *types.Pointer:
-		return "*" + typeStr0(t.Elem(), imports)
-	case *types.Map:
-		return fmt.Sprintf("map[%s]%s",
-			typeStr0(t.Key(), imports),
-			typeStr0(t.Elem(), imports),
-		)
-	case *types.Slice:
-		return "[]" + typeStr0(t.Elem(), imports)
-	case *types.Basic:
-		return t.Name()
-	case *types.Interface:
-		if t.NumEmbeddeds() > 0 || t.NumExplicitMethods() > 0 {
-			typeStrPanic(errgo.Newf("only interface{} supported as yet"))
-		}
-		return "interface{}"
+		imports[pkg.Path()] = name
+		return name
 	}
-	typeStrPanic(errgo.Newf("unexpected type %s (%T)", t, t))
-	panic("not reached")
+	return types.TypeString(t, qualify)
 }
 
 func parseMethodType(t *types.Signature) (ptype, rtype types.Type, err error) {
@@ -282,54 +237,4 @@ func parseMethodType(t *types.Signature) (ptype, rtype types.Type, err error) {
 		rtype = rp.At(0).Type()
 	}
 	return ptype, rtype, nil
-}
-
-// typeCheck runs the Go type checker on the package
-// with the given path and returns the type-checked package.
-func typeCheck(pkgPath string) (*types.Package, error) {
-	// TODO put this in a utility package somewhere.
-
-	// We install the package because gcimporter
-	// ignores source files by default and uses only
-	// the object file data, which may be out of date.
-	cmd := exec.Command("go", "install", pkgPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return nil, errgo.Notef(err, "cannot install %s", pkgPath)
-	}
-
-	buildPkg, err := build.Import(pkgPath, currentDir, 0)
-	if err != nil {
-		return nil, errgo.Notef(err, "cannot import %q", pkgPath)
-	}
-	filter := func(info os.FileInfo) bool {
-		for _, name := range buildPkg.GoFiles {
-			if info.Name() == name {
-				return true
-			}
-		}
-		return false
-	}
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, buildPkg.Dir, filter, parser.ParseComments|parser.DeclarationErrors)
-	if err != nil {
-		return nil, errgo.Notef(err, "cannot parse server package")
-	}
-	if len(pkgs) != 1 {
-		return nil, errgo.Newf("found more than one package")
-	}
-	pkg, ok := pkgs[buildPkg.Name]
-	if !ok {
-		return nil, errgo.Newf("package %s not found in parsed package", buildPkg.Name)
-	}
-	var files []*ast.File
-	for _, file := range pkg.Files {
-		files = append(files, file)
-	}
-	typesPkg, err := types.Check(buildPkg.ImportPath, fset, files)
-	if err != nil {
-		return nil, errgo.Notef(err, "cannot type check %s", buildPkg.ImportPath)
-	}
-	return typesPkg, nil
 }
