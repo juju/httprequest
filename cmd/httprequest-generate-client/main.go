@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"go/ast"
 	"go/build"
 	"go/format"
+	"go/parser"
 	"io/ioutil"
 	"os"
 	"strings"
@@ -66,12 +68,14 @@ type {{.ClientType}} struct {
 
 {{range .Methods}}
 {{if .RespType}}
+	{{.Doc}}
 	func (c *{{$.ClientType}}) {{.Name}}(p *{{.ParamType}}) ({{.RespType}}, error) {
 		var r {{.RespType}}
 		err := c.Client.Call(p, &r)
 		return r, err
 	}
 {{else}}
+	{{.Doc}}
 	func (c *{{$.ClientType}}) {{.Name}}(p *{{.ParamType}}) (error) {
 		return c.Client.Call(p, nil)
 	}
@@ -125,6 +129,7 @@ func writeOutput(data []byte, clientType string) error {
 
 type method struct {
 	Name      string
+	Doc       string
 	ParamType string
 	RespType  string
 }
@@ -137,6 +142,7 @@ func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
 		ImportPkgs: map[string]bool{
 			serverPkg: false, // false means don't load tests.
 		},
+		ParserMode: parser.ParseComments,
 	}
 	prog, err := cfg.Load()
 	if err != nil {
@@ -177,8 +183,10 @@ func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
 			fmt.Fprintf(os.Stderr, "ignoring method %s: %v\n", name, err)
 			continue
 		}
+		comment := docComment(prog, sel)
 		methods = append(methods, method{
 			Name:      name,
+			Doc:       comment,
 			ParamType: typeStr(ptype, imports),
 			RespType:  typeStr(rtype, imports),
 		})
@@ -188,6 +196,48 @@ func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
 		allImports = append(allImports, path)
 	}
 	return methods, allImports, nil
+}
+
+// docComment returns the doc comment for the method referred to
+// by the given selection.
+func docComment(prog *loader.Program, sel *types.Selection) string {
+	obj := sel.Obj()
+	tokFile := prog.Fset.File(obj.Pos())
+	if tokFile == nil {
+		panic("no file found for method")
+	}
+	filename := tokFile.Name()
+	for _, pkgInfo := range prog.AllPackages {
+		for _, f := range pkgInfo.Files {
+			if tokFile := prog.Fset.File(f.Pos()); tokFile == nil || tokFile.Name() != filename {
+				continue
+			}
+			// We've found the file we're looking for. Now traverse all
+			// top level declarations looking for the right function declaration.
+			for _, decl := range f.Decls {
+				fdecl, ok := decl.(*ast.FuncDecl)
+				if ok && fdecl.Name.Pos() == obj.Pos() {
+					// Found it!
+					return commentStr(fdecl.Doc)
+				}
+			}
+		}
+	}
+	panic("method declaration not found")
+}
+
+func commentStr(c *ast.CommentGroup) string {
+	if c == nil {
+		return ""
+	}
+	var b []byte
+	for i, cc := range c.List {
+		if i > 0 {
+			b = append(b, '\n')
+		}
+		b = append(b, cc.Text...)
+	}
+	return string(b)
 }
 
 // typeStr returns the type string to be used when using the
