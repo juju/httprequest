@@ -4,11 +4,13 @@
 package httprequest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 
@@ -83,8 +85,11 @@ func (c *Client) Call(params, resp interface{}) error {
 	if rt.method == "" {
 		return errgo.Newf("type %T has no httprequest.Route field", params)
 	}
-	reqURL := appendURL(c.BaseURL, rt.path)
-	req, err := Marshal(reqURL, rt.method, params)
+	reqURL, err := appendURL(c.BaseURL, rt.path)
+	if err != nil {
+		return errgo.Mask(err)
+	}
+	req, err := Marshal(reqURL.String(), rt.method, params)
 	if err != nil {
 		return errgo.Mask(err)
 	}
@@ -106,26 +111,98 @@ func (c *Client) Call(params, resp interface{}) error {
 	if err != nil {
 		return errgo.Mask(err, errgo.Any)
 	}
+	defer httpResp.Body.Close()
 
 	// Return response directly if required.
 	if respPt, ok := resp.(**http.Response); ok {
 		*respPt = httpResp
 		return nil
 	}
-	defer httpResp.Body.Close()
+	return c.unmarshalResponse(httpResp, resp)
+}
+
+// Do sends the given request and unmarshals its JSON
+// result into resp, which should be a pointer to the response value.
+// If an error status is returned, the error will be unmarshaled
+// as in Client.Call. The req.Body field must be nil - any request
+// body should be provided in the body parameter.
+//
+// If resp is nil, the response will be ignored if the response was
+// successful.
+//
+// Any error that c.UnmarshalError or c.Doer returns will not
+// have its cause masked.
+//
+// The request URL field is changed to the actual URL used.
+func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) error {
+	reqURL, err := appendURL(c.BaseURL, req.URL.String())
+	if err != nil {
+		return errgo.Mask(err)
+	}
+	req.URL = reqURL
+	if req.Body != nil {
+		return errgo.Newf("%s %s: request body supplied unexpectedly", req.Method, req.URL)
+	}
+	inferContentLength(req, body)
+	doer := c.Doer
+	if doer == nil {
+		doer = http.DefaultClient
+	}
+	var httpResp *http.Response
+	// Use DoWithBody when it's available and body is not nil.
+	doer1, ok := doer.(DoerWithBody)
+	if ok && body != nil {
+		httpResp, err = doer1.DoWithBody(req, body)
+	} else {
+		if body != nil {
+			req.Body = ioutil.NopCloser(body)
+		}
+		httpResp, err = doer.Do(req)
+	}
+	if err != nil {
+		return errgo.NoteMask(err, fmt.Sprintf("%s %s", req.Method, req.URL), errgo.Any)
+	}
+	return c.unmarshalResponse(httpResp, resp)
+}
+
+// Get is a convenience method that uses c.Do to issue
+// a GET request to the given URL. The given URL is
+// treated as relative to c.BaseURL and should
+// not contain a host part.
+func (c *Client) Get(url string, resp interface{}) error {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return errgo.Notef(err, "cannot make request")
+	}
+	return c.Do(req, nil, resp)
+}
+
+func inferContentLength(req *http.Request, body io.ReadSeeker) {
+	if body == nil {
+		return
+	}
+	switch v := body.(type) {
+	case *bytes.Reader:
+		req.ContentLength = int64(v.Len())
+	case *strings.Reader:
+		req.ContentLength = int64(v.Len())
+	}
+}
+
+// unmarshalResponse unmarshals
+func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) error {
 	if 200 <= httpResp.StatusCode && httpResp.StatusCode < 300 {
 		return UnmarshalJSONResponse(httpResp, resp)
 	}
-
 	errUnmarshaler := c.UnmarshalError
 	if errUnmarshaler == nil {
 		errUnmarshaler = DefaultErrorUnmarshaler
 	}
-	err = errUnmarshaler(httpResp)
+	err := errUnmarshaler(httpResp)
 	if err == nil {
 		err = errgo.Newf("unexpected HTTP response status: %s", httpResp.Status)
 	}
-	return err
+	return errgo.NoteMask(err, httpResp.Request.Method+" "+httpResp.Request.URL.String(), errgo.Any)
 }
 
 // ErrorUnmarshaler returns a function which will unmarshal error
@@ -159,7 +236,7 @@ func ErrorUnmarshaler(template error) func(*http.Response) error {
 
 // UnmarshalJSONResponse unmarshals the given HTTP response
 // into x, which should be a pointer to the result to be
-// unmarshaled into. 
+// unmarshaled into.
 func UnmarshalJSONResponse(resp *http.Response, x interface{}) error {
 	// Try to read all the body so that we can reuse the
 	// connection, but don't try *too* hard.
@@ -168,7 +245,7 @@ func UnmarshalJSONResponse(resp *http.Response, x interface{}) error {
 		return nil
 	}
 	if err := checkIsJSON(resp.Header, resp.Body); err != nil {
-		return errgo.Mask(err)
+		return errgo.Notef(err, "%s %s", resp.Request.Method, resp.Request.URL)
 	}
 	// Decode only a single JSON value, and then
 	// discard the rest of the body so that we can
@@ -176,7 +253,7 @@ func UnmarshalJSONResponse(resp *http.Response, x interface{}) error {
 	// has put garbage on the end.
 	dec := json.NewDecoder(resp.Body)
 	if err := dec.Decode(x); err != nil {
-		return errgo.Mask(err)
+		return errgo.Notef(err, "%s %s", resp.Request.Method, resp.Request.URL)
 	}
 	return nil
 }
@@ -203,11 +280,38 @@ func (e *RemoteError) Error() string {
 	return "httprequest: " + e.Message
 }
 
-// appendURL appends the path p to the URL u
-// separated with a "/".
-func appendURL(u, p string) string {
-	if p == "" {
-		return u
+// appendURL returns the result of combining the
+// given base URL and relative URL.
+//
+// The path of the relative URL will be appended
+// to the base URL, separated by a slash (/) if
+// needed.
+//
+// Any query parameters will be concatenated together.
+//
+// appendURL will return an error if relURLStr contains
+// a host name.
+func appendURL(baseURLStr, relURLStr string) (*url.URL, error) {
+	b, err := url.Parse(baseURLStr)
+	if err != nil {
+		return nil, errgo.Notef(err, "cannot parse %q", baseURLStr)
 	}
-	return strings.TrimSuffix(u, "/") + "/" + strings.TrimPrefix(p, "/")
+	r, err := url.Parse(relURLStr)
+	if err != nil {
+		return nil, errgo.Notef(err, "cannot parse %q", relURLStr)
+	}
+	if r.Host != "" {
+		return nil, errgo.Newf("relative URL specifies a host")
+	}
+	if r.Path != "" {
+		b.Path = strings.TrimSuffix(b.Path, "/") + "/" + strings.TrimPrefix(r.Path, "/")
+	}
+	if r.RawQuery != "" {
+		if b.RawQuery != "" {
+			b.RawQuery += "&" + r.RawQuery
+		} else {
+			b.RawQuery = r.RawQuery
+		}
+	}
+	return b, nil
 }
