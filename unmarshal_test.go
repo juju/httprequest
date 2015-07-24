@@ -19,13 +19,9 @@ import (
 	"github.com/juju/httprequest"
 )
 
-type testSuite struct{}
+type unmarshalSuite struct{}
 
-var _ = gc.Suite(&testSuite{})
-
-func body(s string) io.ReadCloser {
-	return ioutil.NopCloser(strings.NewReader(s))
-}
+var _ = gc.Suite(&unmarshalSuite{})
 
 var unmarshalTests = []struct {
 	about       string
@@ -363,7 +359,7 @@ var unmarshalTests = []struct {
 			Body:   body("invalid JSON"),
 		},
 	},
-	expectError: "cannot unmarshal into field: unexpected content type: expected \"application/json\", got \"text/html\"",
+	expectError: `cannot unmarshal into field: unexpected content type text/html; want application/json; content: invalid JSON`,
 }}
 
 type SFG struct {
@@ -376,7 +372,7 @@ type sFG struct {
 	G int `httprequest:",form"`
 }
 
-func (*testSuite) TestUnmarshal(c *gc.C) {
+func (*unmarshalSuite) TestUnmarshal(c *gc.C) {
 	for i, test := range unmarshalTests {
 		c.Logf("%d: %s", i, test.about)
 		t := reflect.TypeOf(test.val)
@@ -426,4 +422,8 @@ func (r errorReader) Read([]byte) (int, error) {
 
 func (r errorReader) Close() error {
 	return nil
+}
+
+func body(s string) io.ReadCloser {
+	return ioutil.NopCloser(strings.NewReader(s))
 }
