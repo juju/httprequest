@@ -114,7 +114,7 @@ func (c *Client) Call(params, resp interface{}) error {
 	}
 	defer httpResp.Body.Close()
 	if 200 <= httpResp.StatusCode && httpResp.StatusCode < 300 {
-		return unmarshalJSONResponse(httpResp, resp)
+		return UnmarshalJSONResponse(httpResp, resp)
 	}
 
 	errUnmarshaler := c.UnmarshalError
@@ -150,19 +150,17 @@ func ErrorUnmarshaler(template error) func(*http.Response) error {
 			return fmt.Errorf("cannot unmarshal error response (status %s): %v", resp.Status, err)
 		}
 		errv := reflect.New(t)
-		if err := unmarshalJSONResponse(resp, errv.Interface()); err != nil {
+		if err := UnmarshalJSONResponse(resp, errv.Interface()); err != nil {
 			return fmt.Errorf("cannot unmarshal error response (status %s): %v", resp.Status, err)
 		}
 		return errv.Interface().(error)
 	}
 }
 
-// unmarshalJSONResponse unmarshals the given HTTP response
+// UnmarshalJSONResponse unmarshals the given HTTP response
 // into x, which should be a pointer to the result to be
-// unmarshaled into.
-func unmarshalJSONResponse(resp *http.Response, x interface{}) error {
-	// TODO export this function?
-
+// unmarshaled into. 
+func UnmarshalJSONResponse(resp *http.Response, x interface{}) error {
 	// Try to read all the body so that we can reuse the
 	// connection, but don't try *too* hard.
 	defer io.Copy(ioutil.Discard, io.LimitReader(resp.Body, 8*1024))
