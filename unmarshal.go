@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"mime"
-	"net/http"
 	"reflect"
 
 	"gopkg.in/errgo.v1"
@@ -141,7 +139,7 @@ func unmarshalString(tag tag) unmarshaler {
 // unmarshalBody unmarshals the http request body
 // into the given value.
 func unmarshalBody(v reflect.Value, p Params, makeResult resultMaker) error {
-	if err := checkIsJSON(p.Request.Header); err != nil {
+	if err := checkIsJSON(p.Request.Header, p.Request.Body); err != nil {
 		return errgo.Mask(err)
 	}
 	data, err := ioutil.ReadAll(p.Request.Body)
@@ -221,18 +219,4 @@ func unmarshalWithScan(tag tag) unmarshaler {
 		}
 		return nil
 	}
-}
-
-// checkIsJSON checks that the content type of
-// the given header implies that the content
-// is JSON.
-func checkIsJSON(header http.Header) error {
-	mediaType, _, err := mime.ParseMediaType(header.Get("Content-Type"))
-	if err != nil {
-		return errgo.Mask(err)
-	}
-	if mediaType != "application/json" {
-		return errgo.Newf("unexpected content type: expected \"application/json\", got %q", mediaType)
-	}
-	return nil
 }

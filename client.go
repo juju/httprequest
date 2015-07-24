@@ -144,7 +144,7 @@ func ErrorUnmarshaler(template error) func(*http.Response) error {
 			loc, _ := resp.Location()
 			return fmt.Errorf("unexpected redirect (status %s) from %q to %q", resp.Status, resp.Request.URL, loc)
 		}
-		if err := checkIsJSON(resp.Header); err != nil {
+		if err := checkIsJSON(resp.Header, resp.Body); err != nil {
 			// TODO consider including some or all of the body
 			// in the error.
 			return fmt.Errorf("cannot unmarshal error response (status %s): %v", resp.Status, err)
@@ -167,7 +167,7 @@ func UnmarshalJSONResponse(resp *http.Response, x interface{}) error {
 	if x == nil {
 		return nil
 	}
-	if err := checkIsJSON(resp.Header); err != nil {
+	if err := checkIsJSON(resp.Header, resp.Body); err != nil {
 		return errgo.Mask(err)
 	}
 	// Decode only a single JSON value, and then
