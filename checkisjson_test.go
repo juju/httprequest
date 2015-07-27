@@ -49,7 +49,7 @@ var checkIsJSONTests = []struct {
 }, {
 	about:       "large text body",
 	contentType: "text/plain",
-	body:        strings.Repeat("x", 1024 + 300),
+	body:        strings.Repeat("x", 1024+300),
 	expectError: `unexpected content type text/plain; want application/json; content: ` + strings.Repeat("x", 1024) + ` \.\.\. \[300 bytes omitted]`,
 }, {
 	about:       "html with no text",
