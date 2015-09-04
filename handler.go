@@ -27,6 +27,14 @@ var (
 	ioCloserType           = reflect.TypeOf((*io.Closer)(nil)).Elem()
 )
 
+// HeaderSetter is the interface checked for by WriteJSON.
+// If implemented on a value passed to WriteJSON, the SetHeader
+// method will be called to allow it to set custom headers
+// on the response.
+type HeaderSetter interface {
+	SetHeader(http.Header)
+}
+
 // Handle converts a function into a Handler. The argument f
 // must be a function of one of the following six forms, where ArgT
 // must be a struct type acceptable to Unmarshal and ResultT is a type
@@ -424,6 +432,9 @@ func WriteJSON(w http.ResponseWriter, code int, val interface{}) error {
 		return errgo.Mask(err)
 	}
 	w.Header().Set("content-type", "application/json")
+	if headerSetter, ok := val.(HeaderSetter); ok {
+		headerSetter.SetHeader(w.Header())
+	}
 	w.WriteHeader(code)
 	w.Write(data)
 	return nil
