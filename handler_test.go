@@ -780,6 +780,24 @@ var (
 	errNil    = errors.New("nil result")
 )
 
+type HeaderNumber struct {
+	N int
+}
+
+func (HeaderNumber) SetHeader(h http.Header) {
+	h.Add("some-custom-header", "yes")
+}
+
+func (*handlerSuite) TestSetHeader(c *gc.C) {
+	rec := httptest.NewRecorder()
+	err := httprequest.WriteJSON(rec, http.StatusTeapot, HeaderNumber{1234})
+	c.Assert(err, gc.IsNil)
+	c.Assert(rec.Code, gc.Equals, http.StatusTeapot)
+	c.Assert(rec.Body.String(), gc.Equals, `{"N":1234}`)
+	c.Assert(rec.Header().Get("content-type"), gc.Equals, "application/json")
+	c.Assert(rec.Header().Get("some-custom-header"), gc.Equals, "yes")
+}
+
 var errorMapper httprequest.ErrorMapper = func(err error) (int, interface{}) {
 	resp := &httprequest.RemoteError{
 		Message: err.Error(),
