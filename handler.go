@@ -15,7 +15,11 @@ import (
 
 // ErrorMapper holds a function that can convert a Go error
 // into a form that can be returned as a JSON body from an HTTP request.
+//
 // The httpStatus value reports the desired HTTP status.
+//
+// If the returned errorBody implements HeaderSetter, then
+// that method will be called to add custom headers to the request.
 type ErrorMapper func(err error) (httpStatus int, errorBody interface{})
 
 var (
@@ -26,14 +30,6 @@ var (
 	httpRequestType        = reflect.TypeOf((*http.Request)(nil))
 	ioCloserType           = reflect.TypeOf((*io.Closer)(nil)).Elem()
 )
-
-// HeaderSetter is the interface checked for by WriteJSON.
-// If implemented on a value passed to WriteJSON, the SetHeader
-// method will be called to allow it to set custom headers
-// on the response.
-type HeaderSetter interface {
-	SetHeader(http.Header)
-}
 
 // Handle converts a function into a Handler. The argument f
 // must be a function of one of the following six forms, where ArgT
@@ -413,6 +409,11 @@ func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
 
 // WriteError writes an error to a ResponseWriter
 // and sets the HTTP status code.
+//
+// It uses WriteJSON to write the error body returned from
+// the ErrorMapper so it is possible to add custom
+// headers to the HTTP error response by implementing
+// HeaderSetter.
 func (e ErrorMapper) WriteError(w http.ResponseWriter, err error) {
 	status, resp := e(err)
 	WriteJSON(w, status, resp)
@@ -420,6 +421,12 @@ func (e ErrorMapper) WriteError(w http.ResponseWriter, err error) {
 
 // WriteJSON writes the given value to the ResponseWriter
 // and sets the HTTP status to the given code.
+//
+// If val implements the HeaderSetter interface, the SetHeader
+// method will be called to add additional headers to the
+// HTTP response. It is called after the Content-Type header
+// has been added, so can be used to override the content type
+// if required.
 func WriteJSON(w http.ResponseWriter, code int, val interface{}) error {
 	// TODO consider marshalling directly to w using json.NewEncoder.
 	// pro: this will not require a full buffer allocation.
@@ -438,6 +445,38 @@ func WriteJSON(w http.ResponseWriter, code int, val interface{}) error {
 	w.WriteHeader(code)
 	w.Write(data)
 	return nil
+}
+
+// HeaderSetter is the interface checked for by WriteJSON.
+// If implemented on a value passed to WriteJSON, the SetHeader
+// method will be called to allow it to set custom headers
+// on the response.
+type HeaderSetter interface {
+	SetHeader(http.Header)
+}
+
+// CustomHeader is a type that allows a JSON value to
+// set custom HTTP headers associated with the
+// HTTP response.
+type CustomHeader struct {
+	// Body holds the JSON-marshaled body of the response.
+	Body interface{}
+
+	// SetHeaderFunc holds a function that will be called
+	// to set any custom headers on the response.
+	SetHeaderFunc func(http.Header)
+}
+
+// MarshalJSON implements json.Marshaler by marshaling
+// h.Body.
+func (h CustomHeader) MarshalJSON() ([]byte, error) {
+	return json.Marshal(h.Body)
+}
+
+// SetHeader implements HeaderSetter by calling
+// h.SetHeaderFunc.
+func (h CustomHeader) SetHeader(header http.Header) {
+	h.SetHeaderFunc(header)
 }
 
 // Ensure statically that responseWriter does implement http.Flusher.
