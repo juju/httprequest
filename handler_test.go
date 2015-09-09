@@ -774,10 +774,11 @@ func (*handlerSuite) TestWriteJSON(c *gc.C) {
 }
 
 var (
-	errUnauth = errors.New("unauth")
-	errBadReq = errors.New("bad request")
-	errOther  = errors.New("other")
-	errNil    = errors.New("nil result")
+	errUnauth        = errors.New("unauth")
+	errBadReq        = errors.New("bad request")
+	errOther         = errors.New("other")
+	errCustomHeaders = errors.New("custom headers")
+	errNil           = errors.New("nil result")
 )
 
 type HeaderNumber struct {
@@ -798,6 +799,10 @@ func (*handlerSuite) TestSetHeader(c *gc.C) {
 	c.Assert(rec.Header().Get("some-custom-header"), gc.Equals, "yes")
 }
 
+func (*handlerSuite) TestSetHeaderOnErrorMapper(c *gc.C) {
+
+}
+
 var errorMapper httprequest.ErrorMapper = func(err error) (int, interface{}) {
 	resp := &httprequest.RemoteError{
 		Message: err.Error(),
@@ -810,6 +815,13 @@ var errorMapper httprequest.ErrorMapper = func(err error) (int, interface{}) {
 	case errBadReq, httprequest.ErrUnmarshal:
 		status = http.StatusBadRequest
 		resp.Code = "bad request"
+	case errCustomHeaders:
+		return http.StatusNotAcceptable, httprequest.CustomHeader{
+			Body: resp,
+			SetHeaderFunc: func(h http.Header) {
+				h.Set("Acceptability", "not at all")
+			},
+		}
 	case errNil:
 		return status, nil
 	}
@@ -820,6 +832,7 @@ var writeErrorTests = []struct {
 	err          error
 	expectStatus int
 	expectResp   *httprequest.RemoteError
+	expectHeader http.Header
 }{{
 	err:          errUnauth,
 	expectStatus: http.StatusUnauthorized,
@@ -843,6 +856,15 @@ var writeErrorTests = []struct {
 }, {
 	err:          errNil,
 	expectStatus: http.StatusInternalServerError,
+}, {
+	err:          errCustomHeaders,
+	expectStatus: http.StatusNotAcceptable,
+	expectResp: &httprequest.RemoteError{
+		Message: errCustomHeaders.Error(),
+	},
+	expectHeader: http.Header{
+		"Acceptability": {"not at all"},
+	},
 }}
 
 func (s *handlerSuite) TestWriteError(c *gc.C) {
@@ -853,6 +875,9 @@ func (s *handlerSuite) TestWriteError(c *gc.C) {
 		resp := parseErrorResponse(c, rec.Body.Bytes())
 		c.Assert(resp, gc.DeepEquals, test.expectResp)
 		c.Assert(rec.Code, gc.Equals, test.expectStatus)
+		for name, vals := range test.expectHeader {
+			c.Assert(rec.HeaderMap[name], jc.DeepEquals, vals)
+		}
 	}
 }
 
