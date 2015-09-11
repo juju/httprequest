@@ -440,12 +440,6 @@ var handlePanicTests = []struct {
 	expect: `bad handler function: last argument cannot be used for Unmarshal: bad route tag "httprequest:\\"\\"": no httprequest tag`,
 }, {
 	f: func(*struct {
-		httprequest.Route `httprequest:"GET"`
-	}) {
-	},
-	expect: `bad handler function: last argument cannot be used for Unmarshal: bad route tag "httprequest:\\"GET\\"": wrong field count`,
-}, {
-	f: func(*struct {
 		httprequest.Route `httprequest:"GET /foo /bar"`
 	}) {
 	},

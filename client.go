@@ -78,6 +78,12 @@ var DefaultErrorUnmarshaler = ErrorUnmarshaler(new(RemoteError))
 // Any error that c.UnmarshalError or c.Doer returns will not
 // have its cause masked.
 func (c *Client) Call(params, resp interface{}) error {
+	return c.CallURL(c.BaseURL, params, resp)
+}
+
+// CallURL is like Call except that the given URL is used instead of
+// c.BaseURL.
+func (c *Client) CallURL(url string, params, resp interface{}) error {
 	rt, err := getRequestType(reflect.TypeOf(params))
 	if err != nil {
 		return errgo.Mask(err)
@@ -85,7 +91,7 @@ func (c *Client) Call(params, resp interface{}) error {
 	if rt.method == "" {
 		return errgo.Newf("type %T has no httprequest.Route field", params)
 	}
-	reqURL, err := appendURL(c.BaseURL, rt.path)
+	reqURL, err := appendURL(url, rt.path)
 	if err != nil {
 		return errgo.Mask(err)
 	}
@@ -133,13 +139,16 @@ func (c *Client) Call(params, resp interface{}) error {
 // Any error that c.UnmarshalError or c.Doer returns will not
 // have its cause masked.
 //
-// The request URL field is changed to the actual URL used.
+// If req.URL does not have a host part it will be treated as relative to
+// c.BaseURL. req.URL will be updated to the actual URL used.
 func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) error {
-	reqURL, err := appendURL(c.BaseURL, req.URL.String())
-	if err != nil {
-		return errgo.Mask(err)
+	if req.URL.Host == "" {
+		var err error
+		req.URL, err = appendURL(c.BaseURL, req.URL.String())
+		if err != nil {
+			return errgo.Mask(err)
+		}
 	}
-	req.URL = reqURL
 	if req.Body != nil {
 		return errgo.Newf("%s %s: request body supplied unexpectedly", req.Method, req.URL)
 	}
@@ -149,6 +158,7 @@ func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) err
 		doer = http.DefaultClient
 	}
 	var httpResp *http.Response
+	var err error
 	// Use DoWithBody when it's available and body is not nil.
 	doer1, ok := doer.(DoerWithBody)
 	if ok && body != nil {
@@ -165,10 +175,9 @@ func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) err
 	return c.unmarshalResponse(httpResp, resp)
 }
 
-// Get is a convenience method that uses c.Do to issue
-// a GET request to the given URL. The given URL is
-// treated as relative to c.BaseURL and should
-// not contain a host part.
+// Get is a convenience method that uses c.Do to issue a GET request to
+// the given URL. If the given URL does not have a host part then it will
+// be treated as relative to c.BaseURL.
 func (c *Client) Get(url string, resp interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
