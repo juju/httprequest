@@ -131,6 +131,25 @@ func (s *clientSuite) TestCall(c *gc.C) {
 	}
 }
 
+func (s *clientSuite) TestCallURLNoRequestPath(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+
+	var client httprequest.Client
+	req := struct {
+		httprequest.Route `httprequest:"GET"`
+		chM1Req
+	}{
+		chM1Req: chM1Req{
+			P: "hello",
+		},
+	}
+	var resp chM1Resp
+	err := client.CallURL(srv.URL+"/m1/:P", &req, &resp)
+	c.Assert(err, gc.IsNil)
+	c.Assert(resp, jc.DeepEquals, chM1Resp{"hello"})
+}
+
 func mustNewRequest(url string, method string, body io.Reader) *http.Request {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
@@ -266,6 +285,16 @@ func (s *clientSuite) TestGet(c *gc.C) {
 	}
 	var resp chM1Resp
 	err := client.Get("/m1/foo", &resp)
+	c.Assert(err, gc.IsNil)
+	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
+}
+
+func (s *clientSuite) TestGetNoBaseURL(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+	client := httprequest.Client{}
+	var resp chM1Resp
+	err := client.Get(srv.URL+"/m1/foo", &resp)
 	c.Assert(err, gc.IsNil)
 	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
 }

@@ -201,14 +201,20 @@ func parseRouteTag(tag reflect.StructTag) (method, path string, err error) {
 		return "", "", errgo.New("no httprequest tag")
 	}
 	f := strings.Fields(tagStr)
-	if len(f) != 2 {
+	switch len(f) {
+	case 2:
+		path = f[1]
+		fallthrough
+	case 1:
+		method = f[0]
+	default:
 		return "", "", errgo.New("wrong field count")
 	}
-	if !validMethod[f[0]] {
+	if !validMethod[method] {
 		return "", "", errgo.Newf("invalid method")
 	}
 	// TODO check that path looks valid
-	return f[0], f[1], nil
+	return method, path, nil
 }
 
 func makePointerResult(v reflect.Value) reflect.Value {
