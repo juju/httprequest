@@ -5,7 +5,6 @@ package httprequest
 
 import (
 	"bytes"
-	"encoding"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -230,7 +229,15 @@ func marshalString(tag tag) marshaler {
 	}
 }
 
-var textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+// encodingTextMarshaler is the same as encoding.TextUnmarshaler
+// but avoids us importing the encoding package, which some
+// broken gccgo installations do not allow.
+// TODO remove this and use encoding.TextMarshaler instead.
+type encodingTextMarshaler interface {
+	MarshalText() (text []byte, err error)
+}
+
+var textMarshalerType = reflect.TypeOf((*encodingTextMarshaler)(nil)).Elem()
 
 func implementsTextMarshaler(t reflect.Type) bool {
 	// Use the pointer type, because a pointer
@@ -248,7 +255,7 @@ func marshalWithMarshalText(t reflect.Type, tag tag) marshaler {
 		panic("unexpected source")
 	}
 	return func(v reflect.Value, p *Params) error {
-		m := v.Addr().Interface().(encoding.TextMarshaler)
+		m := v.Addr().Interface().(encodingTextMarshaler)
 		data, err := m.MarshalText()
 		if err != nil {
 			return errgo.Mask(err)

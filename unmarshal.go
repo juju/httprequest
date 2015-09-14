@@ -1,7 +1,6 @@
 package httprequest
 
 import (
-	"encoding"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -176,7 +175,15 @@ var formGetters = []func(name string, p Params) (string, bool){
 	sourceBody: nil,
 }
 
-var textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
+// encodingTextUnmarshaler is the same as encoding.TextUnmarshaler
+// but avoids us importing the encoding package, which some
+// broken gccgo installations do not allow.
+// TODO remove this and use encoding.TextUnmarshaler instead.
+type encodingTextUnmarshaler interface {
+	UnmarshalText(text []byte) error
+}
+
+var textUnmarshalerType = reflect.TypeOf((*encodingTextUnmarshaler)(nil)).Elem()
 
 func implementsTextUnmarshaler(t reflect.Type) bool {
 	// Use the pointer type, because a pointer
@@ -195,7 +202,7 @@ func unmarshalWithUnmarshalText(t reflect.Type, tag tag) unmarshaler {
 	}
 	return func(v reflect.Value, p Params, makeResult resultMaker) error {
 		val, _ := getVal(tag.name, p)
-		uv := makeResult(v).Addr().Interface().(encoding.TextUnmarshaler)
+		uv := makeResult(v).Addr().Interface().(encodingTextUnmarshaler)
 		return uv.UnmarshalText([]byte(val))
 	}
 }
