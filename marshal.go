@@ -109,7 +109,11 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 		return errgo.Mask(err)
 	}
 	p.Request.URL.Path = path
-	p.Request.URL.RawQuery = p.Request.Form.Encode()
+	if q := p.Request.Form.Encode(); q != "" && p.Request.URL.RawQuery != "" {
+		p.Request.URL.RawQuery += "&" + q
+	} else {
+		p.Request.URL.RawQuery = q
+	}
 	return nil
 }
 
