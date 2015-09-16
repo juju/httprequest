@@ -303,6 +303,13 @@ var marshalTests = []struct {
 	},
 	expectURLString: "http://localhost?a=b&f1=test",
 },
+	{
+		about:           "url with query parameters no form",
+		urlString:       "http://localhost?a=b",
+		method:          "POST",
+		val:             &struct{}{},
+		expectURLString: "http://localhost?a=b",
+	},
 }
 
 func getStruct() interface{} {

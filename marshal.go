@@ -112,7 +112,7 @@ func marshal(p *Params, xv reflect.Value, pt *requestType) error {
 	if q := p.Request.Form.Encode(); q != "" && p.Request.URL.RawQuery != "" {
 		p.Request.URL.RawQuery += "&" + q
 	} else {
-		p.Request.URL.RawQuery = q
+		p.Request.URL.RawQuery += q
 	}
 	return nil
 }
