@@ -292,6 +292,16 @@ var marshalTests = []struct {
 		F1: "test",
 	},
 	expectError: `cannot marshal field: cannot marshal request body: json: error calling MarshalJSON for type \*httprequest_test.failJSONMarshaler: marshal error`,
+}, {
+	about:     "url with query parameters",
+	urlString: "http://localhost?a=b",
+	method:    "POST",
+	val: &struct {
+		F1 failJSONMarshaler `httprequest:"f1,form"`
+	}{
+		F1: "test",
+	},
+	expectURLString: "http://localhost?a=b&f1=test",
 },
 }
 
