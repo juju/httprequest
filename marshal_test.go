@@ -5,6 +5,7 @@ package httprequest_test
 
 import (
 	"io/ioutil"
+	"net/http"
 
 	gc "gopkg.in/check.v1"
 	"gopkg.in/errgo.v1"
@@ -29,6 +30,7 @@ var marshalTests = []struct {
 	val             interface{}
 	expectURLString string
 	expectBody      *string
+	expectHeader    http.Header
 	expectError     string
 }{{
 	about:     "struct with simple fields",
@@ -302,15 +304,68 @@ var marshalTests = []struct {
 		F1: "test",
 	},
 	expectURLString: "http://localhost?a=b&f1=test",
-},
-	{
-		about:           "url with query parameters no form",
-		urlString:       "http://localhost?a=b",
-		method:          "POST",
-		val:             &struct{}{},
-		expectURLString: "http://localhost?a=b",
+}, {
+	about:           "url with query parameters no form",
+	urlString:       "http://localhost?a=b",
+	method:          "POST",
+	val:             &struct{}{},
+	expectURLString: "http://localhost?a=b",
+}, {
+	about:     "struct with headers",
+	urlString: "http://localhost:8081/",
+	val: &struct {
+		F1 string `httprequest:",header"`
+		F2 int    `httprequest:",header"`
+		F3 bool   `httprequest:",header"`
+	}{
+		F1: "some text",
+		F2: 99,
+		F3: true,
 	},
-}
+	expectURLString: "http://localhost:8081/",
+	expectHeader: http.Header{
+		"F1": []string{"some text"},
+		"F2": []string{"99"},
+		"F3": []string{"true"},
+	},
+}, {
+	about:     "struct with header slice",
+	urlString: "http://localhost:8081/:F1",
+	val: &struct {
+		F1 int      `httprequest:",path"`
+		F2 string   `httprequest:",form"`
+		F3 []string `httprequest:",header"`
+	}{
+		F1: 99,
+		F2: "some text",
+		F3: []string{"A", "B", "C"},
+	},
+	expectURLString: "http://localhost:8081/99?F2=some+text",
+	expectHeader:    http.Header{"F3": []string{"A", "B", "C"}},
+}, {
+	about:     "SetHeader called after marshaling",
+	urlString: "http://localhost:8081/",
+	val: &httprequest.CustomHeader{
+		Body: &struct {
+			F1 string `httprequest:",header"`
+			F2 int    `httprequest:",header"`
+			F3 bool   `httprequest:",header"`
+		}{
+			F1: "some text",
+			F2: 99,
+			F3: false,
+		},
+		SetHeaderFunc: func(h http.Header) {
+			h.Set("F2", "some other text")
+		},
+	},
+	expectURLString: "http://localhost:8081/",
+	expectHeader: http.Header{
+		"F1": []string{"some text"},
+		"F2": []string{"some other text"},
+		"F3": []string{"false"},
+	},
+}}
 
 func getStruct() interface{} {
 	return &struct {
@@ -343,6 +398,9 @@ func (*marshalSuite) TestMarshal(c *gc.C) {
 				c.Assert(req.Header.Get("Content-Type"), gc.Equals, "application/json")
 			}
 			c.Assert(string(data), gc.DeepEquals, *test.expectBody)
+		}
+		for k, v := range test.expectHeader {
+			c.Assert(req.Header[k], gc.DeepEquals, v)
 		}
 	}
 }

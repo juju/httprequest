@@ -360,6 +360,45 @@ var unmarshalTests = []struct {
 		},
 	},
 	expectError: `cannot unmarshal into field: unexpected content type text/html; want application/json; content: invalid JSON`,
+}, {
+	about: "struct with header fields",
+	val: struct {
+		F1 int    `httprequest:"x1,header"`
+		G1 string `httprequest:"g1,header"`
+	}{
+		F1: 99,
+		G1: "g1 val",
+	},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Header: http.Header{
+				"x1": {"99"},
+				"g1": {"g1 val"},
+			},
+		},
+	},
+}, {
+	about: "all field header values",
+	val: struct {
+		A []string  `httprequest:",header"`
+		B *[]string `httprequest:",header"`
+		C []string  `httprequest:",header"`
+		D *[]string `httprequest:",header"`
+	}{
+		A: []string{"a1", "a2"},
+		B: func() *[]string {
+			x := []string{"b1", "b2", "b3"}
+			return &x
+		}(),
+	},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Header: http.Header{
+				"A": {"a1", "a2"},
+				"B": {"b1", "b2", "b3"},
+			},
+		},
+	},
 }}
 
 type SFG struct {
