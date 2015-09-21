@@ -25,6 +25,11 @@ var emptyReader = bytes.NewReader(nil)
 // The Body field in the returned request will always be of type
 // BytesReaderCloser.
 //
+// If x implements the HeaderSetter interface, its SetHeader method will
+// be called to add additional headers to the HTTP request after it has
+// been marshaled. If x is pointer to a CustomHeader object then Marshal will use
+// its Body member to create the HTTP request.
+//
 // The HTTP request will use the given method.  Named fields in the given
 // baseURL will be filled out from "path"-tagged fields in x to form the
 // URL path in the returned request.  These are specified as for httprouter.
@@ -67,7 +72,12 @@ var emptyReader = bytes.NewReader(nil)
 // It is an error if there is a field specified in the URL that is not
 // found in x.
 func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
-	xv := reflect.ValueOf(x)
+	var xv reflect.Value
+	if ch, ok := x.(*CustomHeader); ok {
+		xv = reflect.ValueOf(ch.Body)
+	} else {
+		xv = reflect.ValueOf(x)
+	}
 	pt, err := getRequestType(xv.Type())
 	if err != nil {
 		return nil, errgo.WithCausef(err, ErrBadUnmarshalType, "bad type %s", xv.Type())
@@ -83,7 +93,9 @@ func Marshal(baseURL, method string, x interface{}) (*http.Request, error) {
 	if err := marshal(p, xv, pt); err != nil {
 		return nil, errgo.Mask(err, errgo.Is(ErrUnmarshal))
 	}
-
+	if headerSetter, ok := x.(HeaderSetter); ok {
+		headerSetter.SetHeader(p.Request.Header)
+	}
 	return p.Request, nil
 }
 
@@ -179,10 +191,14 @@ func getMarshaler(tag tag, t reflect.Type) (marshaler, error) {
 	case tag.source == sourceBody:
 		return marshalBody, nil
 	case t == reflect.TypeOf([]string(nil)):
-		if tag.source != sourceForm {
+		switch tag.source {
+		default:
 			return nil, errgo.New("invalid target type []string for path parameter")
+		case sourceForm:
+			return marshalAllField(tag.name), nil
+		case sourceHeader:
+			return marshalAllHeader(tag.name), nil
 		}
-		return marshalAllField(tag.name), nil
 	case t == reflect.TypeOf(""):
 		return marshalString(tag), nil
 	case implementsTextMarshaler(t):
@@ -217,6 +233,14 @@ func marshalBody(v reflect.Value, p *Params) error {
 func marshalAllField(name string) marshaler {
 	return func(v reflect.Value, p *Params) error {
 		p.Request.Form[name] = v.Interface().([]string)
+		return nil
+	}
+}
+
+// marshalAllHeader marshals a []string slice into a header.
+func marshalAllHeader(name string) marshaler {
+	return func(v reflect.Value, p *Params) error {
+		p.Request.Header[name] = v.Interface().([]string)
 		return nil
 	}
 }
@@ -296,6 +320,9 @@ var formSetters = []func(string, string, *Params){
 		p.PathVar = append(p.PathVar, httprouter.Param{Key: name, Value: value})
 	},
 	sourceBody: nil,
+	sourceHeader: func(name, value string, p *Params) {
+		p.Request.Header.Set(name, value)
+	},
 }
 
 // BytesReaderCloser is a bytes.Reader which

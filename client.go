@@ -67,6 +67,9 @@ var DefaultErrorUnmarshaler = ErrorUnmarshaler(new(RemoteError))
 // unmarshals the response into the given response parameter,
 // which should be a pointer to the response value.
 //
+// If params implements the HeaderSetter interface, its SetHeader method
+// will be called to add additional headers to the HTTP request.
+//
 // If resp is nil, the response will be ignored if the
 // request was successful.
 //
