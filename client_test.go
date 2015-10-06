@@ -277,6 +277,20 @@ func (s *clientSuite) TestDo(c *gc.C) {
 	}
 }
 
+func (s *clientSuite) TestDoWithHTTPReponse(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+	client := &httprequest.Client{
+		BaseURL: srv.URL,
+	}
+	var resp *http.Response
+	err := client.Get("/m1/foo", &resp)
+	c.Assert(err, gc.IsNil)
+	data, err := ioutil.ReadAll(resp.Body)
+	c.Assert(err, gc.IsNil)
+	c.Assert(string(data), gc.Equals, `{"P":"foo"}`)
+}
+
 func (s *clientSuite) TestGet(c *gc.C) {
 	srv := s.newServer()
 	defer srv.Close()

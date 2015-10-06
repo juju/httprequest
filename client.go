@@ -139,6 +139,11 @@ func (c *Client) CallURL(url string, params, resp interface{}) error {
 // If resp is nil, the response will be ignored if the response was
 // successful.
 //
+// If resp is of type **http.Response, instead of unmarshaling
+// into it, its element will be set to the returned HTTP
+// response directly and the caller is responsible for
+// closing its Body field.
+//
 // Any error that c.UnmarshalError or c.Doer returns will not
 // have its cause masked.
 //
@@ -174,6 +179,11 @@ func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) err
 	}
 	if err != nil {
 		return errgo.NoteMask(err, fmt.Sprintf("%s %s", req.Method, req.URL), errgo.Any)
+	}
+	// Return response directly if required.
+	if respPt, ok := resp.(**http.Response); ok {
+		*respPt = httpResp
+		return nil
 	}
 	return c.unmarshalResponse(httpResp, resp)
 }
