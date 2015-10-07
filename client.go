@@ -120,13 +120,6 @@ func (c *Client) CallURL(url string, params, resp interface{}) error {
 	if err != nil {
 		return errgo.Mask(err, errgo.Any)
 	}
-	defer httpResp.Body.Close()
-
-	// Return response directly if required.
-	if respPt, ok := resp.(**http.Response); ok {
-		*respPt = httpResp
-		return nil
-	}
 	return c.unmarshalResponse(httpResp, resp)
 }
 
@@ -180,11 +173,6 @@ func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) err
 	if err != nil {
 		return errgo.NoteMask(err, fmt.Sprintf("%s %s", req.Method, req.URL), errgo.Any)
 	}
-	// Return response directly if required.
-	if respPt, ok := resp.(**http.Response); ok {
-		*respPt = httpResp
-		return nil
-	}
 	return c.unmarshalResponse(httpResp, resp)
 }
 
@@ -214,8 +202,14 @@ func inferContentLength(req *http.Request, body io.ReadSeeker) {
 // unmarshalResponse unmarshals
 func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) error {
 	if 200 <= httpResp.StatusCode && httpResp.StatusCode < 300 {
+		if respPt, ok := resp.(**http.Response); ok {
+			*respPt = httpResp
+			return nil
+		}
+		defer httpResp.Body.Close()
 		return UnmarshalJSONResponse(httpResp, resp)
 	}
+	defer httpResp.Body.Close()
 	errUnmarshaler := c.UnmarshalError
 	if errUnmarshaler == nil {
 		errUnmarshaler = DefaultErrorUnmarshaler

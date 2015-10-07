@@ -286,9 +286,108 @@ func (s *clientSuite) TestDoWithHTTPReponse(c *gc.C) {
 	var resp *http.Response
 	err := client.Get("/m1/foo", &resp)
 	c.Assert(err, gc.IsNil)
+	defer resp.Body.Close()
 	data, err := ioutil.ReadAll(resp.Body)
 	c.Assert(err, gc.IsNil)
 	c.Assert(string(data), gc.Equals, `{"P":"foo"}`)
+}
+
+func (s *clientSuite) TestDoWithHTTPReponseAndError(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+	var doer closeCountingDoer // Also check the body is closed.
+	client := &httprequest.Client{
+		BaseURL: srv.URL,
+		Doer:    &doer,
+	}
+	var resp *http.Response
+	err := client.Get("/m3", &resp)
+	c.Assert(resp, gc.IsNil)
+	c.Assert(err, gc.ErrorMatches, `GET http://.*/m3: httprequest: m3 error`)
+	c.Assert(doer.openedBodies, gc.Equals, 1)
+	c.Assert(doer.closedBodies, gc.Equals, 1)
+}
+
+func (s *clientSuite) TestCallWithHTTPResponse(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+	client := &httprequest.Client{
+		BaseURL: srv.URL,
+	}
+	var resp *http.Response
+	err := client.Call(&chM1Req{
+		P: "foo",
+	}, &resp)
+	defer resp.Body.Close()
+	data, err := ioutil.ReadAll(resp.Body)
+	c.Assert(err, gc.IsNil)
+	c.Assert(string(data), gc.Equals, `{"P":"foo"}`)
+}
+
+func (s *clientSuite) TestCallClosesResponseBodyOnSuccess(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+	var doer closeCountingDoer
+	client := &httprequest.Client{
+		BaseURL: srv.URL,
+		Doer:    &doer,
+	}
+	var resp chM1Resp
+	err := client.Call(&chM1Req{
+		P: "foo",
+	}, &resp)
+	c.Assert(err, gc.IsNil)
+	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
+	c.Assert(doer.openedBodies, gc.Equals, 1)
+	c.Assert(doer.closedBodies, gc.Equals, 1)
+}
+
+func (s *clientSuite) TestCallClosesResponseBodyOnError(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+	var doer closeCountingDoer
+	client := &httprequest.Client{
+		BaseURL: srv.URL,
+		Doer:    &doer,
+	}
+	err := client.Call(&chM3Req{}, nil)
+	c.Assert(err, gc.ErrorMatches, ".*m3 error")
+	c.Assert(doer.openedBodies, gc.Equals, 1)
+	c.Assert(doer.closedBodies, gc.Equals, 1)
+}
+
+func (s *clientSuite) TestDoClosesResponseBodyOnSuccess(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+	var doer closeCountingDoer
+	client := &httprequest.Client{
+		BaseURL: srv.URL,
+		Doer:    &doer,
+	}
+	req, err := http.NewRequest("GET", "/m1/foo", nil)
+	c.Assert(err, gc.IsNil)
+	var resp chM1Resp
+	err = client.Do(req, nil, &resp)
+	c.Assert(err, gc.IsNil)
+	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
+	c.Assert(doer.openedBodies, gc.Equals, 1)
+	c.Assert(doer.closedBodies, gc.Equals, 1)
+}
+
+func (s *clientSuite) TestDoClosesResponseBodyOnError(c *gc.C) {
+	srv := s.newServer()
+	defer srv.Close()
+	var doer closeCountingDoer
+	client := &httprequest.Client{
+		BaseURL: srv.URL,
+		Doer:    &doer,
+	}
+	req, err := http.NewRequest("GET", "/m3", nil)
+	c.Assert(err, gc.IsNil)
+	err = client.Do(req, nil, nil)
+	c.Assert(err, gc.ErrorMatches, ".*m3 error")
+	c.Assert(doer.openedBodies, gc.Equals, 1)
+	c.Assert(doer.closedBodies, gc.Equals, 1)
 }
 
 func (s *clientSuite) TestGet(c *gc.C) {
@@ -471,4 +570,37 @@ type doerOnlyFunc func(req *http.Request) (*http.Response, error)
 
 func (f doerOnlyFunc) Do(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type closeCountingDoer struct {
+	// openBodies records the number of response bodies
+	// that have been returned.
+	openedBodies int
+
+	// closedBodies records the number of response bodies
+	// that have been closed.
+	closedBodies int
+}
+
+func (doer *closeCountingDoer) Do(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = &closeCountingReader{
+		doer:       doer,
+		ReadCloser: resp.Body,
+	}
+	doer.openedBodies++
+	return resp, nil
+}
+
+type closeCountingReader struct {
+	doer *closeCountingDoer
+	io.ReadCloser
+}
+
+func (r *closeCountingReader) Close() error {
+	r.doer.closedBodies++
+	return r.ReadCloser.Close()
 }
