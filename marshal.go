@@ -216,9 +216,6 @@ func marshalNop(v reflect.Value, p *Params) error {
 // mashalBody marshals the specified value into the body of the http request.
 func marshalBody(v reflect.Value, p *Params) error {
 	// TODO allow body types that aren't necessarily JSON.
-	if p.Request.Method == "GET" || p.Request.Method == "HEAD" {
-		return errgo.Newf("cannot specify a body with %s method", p.Request.Method)
-	}
 	data, err := json.Marshal(v.Addr().Interface())
 	if err != nil {
 		return errgo.Notef(err, "cannot marshal request body")

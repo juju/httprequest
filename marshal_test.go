@@ -216,16 +216,19 @@ var marshalTests = []struct {
 	about:     "marshal to body of a GET request",
 	urlString: "http://localhost:8081/u",
 	val: &struct {
-		F1 string `httprequest:"user,body"`
+		F1 string `httprequest:",body"`
 	}{
 		F1: "hello test",
 	},
-	expectError: "cannot marshal field: cannot specify a body with GET method",
+	// Providing a body to a GET request is unusual but
+	// some people do it anyway.
+
+	expectBody: newString(`"hello test"`),
 }, {
 	about:     "marshal to nil value to body",
 	urlString: "http://localhost:8081/u",
 	val: &struct {
-		F1 *string `httprequest:"user,body"`
+		F1 *string `httprequest:",body"`
 	}{
 		F1: nil,
 	},
