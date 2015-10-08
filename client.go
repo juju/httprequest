@@ -207,7 +207,10 @@ func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) er
 			return nil
 		}
 		defer httpResp.Body.Close()
-		return UnmarshalJSONResponse(httpResp, resp)
+		if err := UnmarshalJSONResponse(httpResp, resp); err != nil {
+			return errgo.Notef(err, "%s %s", httpResp.Request.Method, httpResp.Request.URL)
+		}
+		return nil
 	}
 	defer httpResp.Body.Close()
 	errUnmarshaler := c.UnmarshalError
@@ -237,11 +240,6 @@ func ErrorUnmarshaler(template error) func(*http.Response) error {
 			loc, _ := resp.Location()
 			return fmt.Errorf("unexpected redirect (status %s) from %q to %q", resp.Status, resp.Request.URL, loc)
 		}
-		if err := checkIsJSON(resp.Header, resp.Body); err != nil {
-			// TODO consider including some or all of the body
-			// in the error.
-			return fmt.Errorf("cannot unmarshal error response (status %s): %v", resp.Status, err)
-		}
 		errv := reflect.New(t)
 		if err := UnmarshalJSONResponse(resp, errv.Interface()); err != nil {
 			return fmt.Errorf("cannot unmarshal error response (status %s): %v", resp.Status, err)
@@ -261,7 +259,7 @@ func UnmarshalJSONResponse(resp *http.Response, x interface{}) error {
 		return nil
 	}
 	if err := checkIsJSON(resp.Header, resp.Body); err != nil {
-		return errgo.Notef(err, "%s %s", resp.Request.Method, resp.Request.URL)
+		return errgo.Mask(err)
 	}
 	// Decode only a single JSON value, and then
 	// discard the rest of the body so that we can
@@ -269,7 +267,7 @@ func UnmarshalJSONResponse(resp *http.Response, x interface{}) error {
 	// has put garbage on the end.
 	dec := json.NewDecoder(resp.Body)
 	if err := dec.Decode(x); err != nil {
-		return errgo.Notef(err, "%s %s", resp.Request.Method, resp.Request.URL)
+		return errgo.Mask(err)
 	}
 	return nil
 }

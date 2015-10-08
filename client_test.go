@@ -104,6 +104,11 @@ var callTests = []struct {
 		P: "hello",
 	},
 	expectResp: &chM1Resp{"hello"},
+}, {
+	about:       "bad content in successful response",
+	req:         &chM4Req{},
+	expectResp:  new(int),
+	expectError: `GET http://.*/m4: unexpected content type text/plain; want application/json; content: bad response`,
 }}
 
 func (s *clientSuite) TestCall(c *gc.C) {
@@ -540,6 +545,14 @@ type chM3Req struct {
 
 func (clientHandlers) M3(p *chM3Req) error {
 	return errgo.New("m3 error")
+}
+
+type chM4Req struct {
+	httprequest.Route `httprequest:"GET /m4"`
+}
+
+func (clientHandlers) M4(p httprequest.Params, _ *chM4Req) {
+	p.Response.Write([]byte("bad response"))
 }
 
 type chContentLengthReq struct {
