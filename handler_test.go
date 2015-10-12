@@ -489,6 +489,7 @@ var handlersTests = []struct {
 	callParams: httptesting.JSONCallParams{
 		Method: "POST",
 		URL:    "/m3/99",
+		JSONBody: make(map[string]interface{}),
 	},
 }}
 
