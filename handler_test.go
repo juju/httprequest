@@ -487,8 +487,8 @@ var handlersTests = []struct {
 }, {
 	calledMethod: "M3Post",
 	callParams: httptesting.JSONCallParams{
-		Method: "POST",
-		URL:    "/m3/99",
+		Method:   "POST",
+		URL:      "/m3/99",
 		JSONBody: make(map[string]interface{}),
 	},
 }}
