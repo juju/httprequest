@@ -57,7 +57,7 @@ type unmarshaler func(v reflect.Value, p Params, makeResult resultMaker) error
 type marshaler func(reflect.Value, *Params) error
 
 // requestType holds information derived from a request
-// type, preprocessed so that it's quick to unmarshal.
+// type, preprocessed so that it's quick to marshal or unmarshal.
 type requestType struct {
 	method string
 	path   string
@@ -65,7 +65,7 @@ type requestType struct {
 }
 
 // field holds preprocessed information on an individual field
-// in the result.
+// in the request.
 type field struct {
 	// index holds the index slice of the field.
 	index []int
@@ -125,9 +125,8 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 	var pt requestType
 	foundRoute := false
 	for _, f := range fields(t.Elem()) {
-		if f.PkgPath != "" {
-			// Ignore unexported fields (note that this
-			// does not apply to anonymous fields).
+		if f.PkgPath != "" && !f.Anonymous {
+			// Ignore non-anonymous unexported fields.
 			continue
 		}
 		if !foundRoute && f.Anonymous && f.Type == reflect.TypeOf(Route{}) {
