@@ -23,8 +23,6 @@ import (
 // - deal with literal interface and struct types.
 // - copy doc comments from server methods.
 
-var currentDir string
-
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: httprequest-generate server-package server-type client-type\n")
@@ -83,20 +81,23 @@ type {{.ClientType}} struct {
 {{end}}
 `))
 
-func generate(serverPkg, serverType, clientType string) error {
-	cwd, err := os.Getwd()
+func generate(serverPkgPath, serverType, clientType string) error {
+	currentDir, err := os.Getwd()
 	if err != nil {
 		return err
-	}
-	currentDir = cwd
-
-	methods, imports, err := serverMethods(serverPkg, serverType)
-	if err != nil {
-		return errgo.Mask(err)
 	}
 	localPkg, err := build.Import(".", currentDir, 0)
 	if err != nil {
 		return errgo.Notef(err, "cannot open package in current directory")
+	}
+	serverPkg, err := build.Import(serverPkgPath, currentDir, 0)
+	if err != nil {
+		return errgo.Notef(err, "cannot open %q", serverPkgPath)
+	}
+
+	methods, imports, err := serverMethods(serverPkg.ImportPath, serverType, localPkg.ImportPath)
+	if err != nil {
+		return errgo.Mask(err)
 	}
 	arg := templateArg{
 		CommandLine: strings.Join(flag.Args(), " "),
@@ -134,7 +135,7 @@ type method struct {
 	RespType  string
 }
 
-func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
+func serverMethods(serverPkg, serverType, localPkg string) ([]method, []string, error) {
 	cfg := loader.Config{
 		TypeCheckFuncBodies: func(string) bool {
 			return false
@@ -166,6 +167,7 @@ func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
 
 	imports := map[string]string{
 		"github.com/juju/httprequest": "httprequest",
+		localPkg:                      "",
 	}
 	var methods []method
 	mset := types.NewMethodSet(ptrObjType)
@@ -191,6 +193,7 @@ func serverMethods(serverPkg, serverType string) ([]method, []string, error) {
 			RespType:  typeStr(rtype, imports),
 		})
 	}
+	delete(imports, localPkg)
 	var allImports []string
 	for path := range imports {
 		allImports = append(allImports, path)
@@ -248,7 +251,7 @@ func typeStr(t types.Type, imports map[string]string) string {
 		return ""
 	}
 	qualify := func(pkg *types.Package) string {
-		if name := imports[pkg.Path()]; name != "" {
+		if name, ok := imports[pkg.Path()]; ok {
 			return name
 		}
 		name := pkg.Name()
