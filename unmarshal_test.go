@@ -133,22 +133,6 @@ var unmarshalTests = []struct {
 		},
 	},
 }, {
-	about: "unexported embedded type for body works ok",
-	val: struct {
-		sFG `httprequest:",body"`
-	}{
-		sFG: sFG{
-			F: 99,
-			G: 100,
-		},
-	},
-	params: httprequest.Params{
-		Request: &http.Request{
-			Header: http.Header{"Content-Type": {"application/json"}},
-			Body:   body(`{"F": 99, "G": 100}`),
-		},
-	},
-}, {
 	about: "unexported type for body is ignored",
 	val: struct {
 		foo sFG `httprequest:",body"`

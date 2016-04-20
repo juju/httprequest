@@ -53,6 +53,7 @@ var handleTests = []struct {
 			c.Assert(p.Request.Form, jc.DeepEquals, url.Values{
 				"c": {"43"},
 			})
+			c.Assert(p.PathPattern, gc.Equals, "")
 			p.Response.Header().Set("Content-Type", "application/json")
 			p.Response.Write([]byte("true"))
 		}
@@ -77,6 +78,7 @@ var handleTests = []struct {
 		}
 		return func(p httprequest.Params, s *testStruct) error {
 			c.Assert(s, jc.DeepEquals, &testStruct{123})
+			c.Assert(p.PathPattern, gc.Equals, "")
 			p.Response.Header().Set("Content-Type", "application/json")
 			p.Response.Write([]byte("true"))
 			return nil
@@ -95,6 +97,7 @@ var handleTests = []struct {
 			A int `httprequest:"a,path"`
 		}
 		return func(p httprequest.Params, s *testStruct) error {
+			c.Assert(p.PathPattern, gc.Equals, "")
 			c.Assert(s, jc.DeepEquals, &testStruct{123})
 			return errUnauth
 		}
@@ -116,6 +119,7 @@ var handleTests = []struct {
 			A int `httprequest:"a,path"`
 		}
 		return func(p httprequest.Params, s *testStruct) (int, error) {
+			c.Assert(p.PathPattern, gc.Equals, "")
 			c.Assert(s, jc.DeepEquals, &testStruct{123})
 			return 1234, nil
 		}
@@ -133,6 +137,7 @@ var handleTests = []struct {
 			A int `httprequest:"a,path"`
 		}
 		return func(p httprequest.Params, s *testStruct) (int, error) {
+			c.Assert(p.PathPattern, gc.Equals, "")
 			c.Assert(s, jc.DeepEquals, &testStruct{123})
 			return 0, errUnauth
 		}
@@ -154,6 +159,7 @@ var handleTests = []struct {
 			A int `httprequest:"a,path"`
 		}
 		return func(p httprequest.Params, s *testStruct) (int, error) {
+			c.Assert(p.PathPattern, gc.Equals, "")
 			_, err := p.Response.Write(nil)
 			c.Assert(err, gc.ErrorMatches, "inappropriate call to ResponseWriter.Write in JSON-returning handler")
 			p.Response.WriteHeader(http.StatusTeapot)
@@ -352,8 +358,9 @@ var handleTests = []struct {
 			httprequest.Route `httprequest:"GET /foo/:bar"`
 			A                 string `httprequest:"bar,path"`
 		}
-		return func(s *testStruct) {
+		return func(p httprequest.Params, s *testStruct) {
 			c.Check(s.A, gc.Equals, "val")
+			c.Assert(p.PathPattern, gc.Equals, "/foo/:bar")
 		}
 	},
 	req: &http.Request{},
@@ -462,19 +469,22 @@ func (*handlerSuite) TestHandlePanicsWithBadFunctions(c *gc.C) {
 }
 
 var handlersTests = []struct {
-	calledMethod string
-	callParams   httptesting.JSONCallParams
+	calledMethod      string
+	callParams        httptesting.JSONCallParams
+	expectPathPattern string
 }{{
 	calledMethod: "M1",
 	callParams: httptesting.JSONCallParams{
 		URL: "/m1/99",
 	},
+	expectPathPattern: "/m1/:p",
 }, {
 	calledMethod: "M2",
 	callParams: httptesting.JSONCallParams{
 		URL:        "/m2/99",
 		ExpectBody: 999,
 	},
+	expectPathPattern: "/m2/:p",
 }, {
 	calledMethod: "M3",
 	callParams: httptesting.JSONCallParams{
@@ -484,6 +494,7 @@ var handlersTests = []struct {
 		},
 		ExpectStatus: http.StatusInternalServerError,
 	},
+	expectPathPattern: "/m3/:p",
 }, {
 	calledMethod: "M3Post",
 	callParams: httptesting.JSONCallParams{
@@ -491,6 +502,7 @@ var handlersTests = []struct {
 		URL:      "/m3/99",
 		JSONBody: make(map[string]interface{}),
 	},
+	expectPathPattern: "/m3/:p",
 }}
 
 func (*handlerSuite) TestHandlers(c *gc.C) {
@@ -530,10 +542,13 @@ func (*handlerSuite) TestHandlers(c *gc.C) {
 	}
 	for i, test := range handlersTests {
 		c.Logf("test %d: %s", i, test.calledMethod)
-		handleVal.calledMethod = ""
+		handleVal = testHandlers{
+			c: c,
+		}
 		test.callParams.Handler = router
 		httptesting.AssertJSONCall(c, test.callParams)
 		c.Assert(handleVal.calledMethod, gc.Equals, test.calledMethod)
+		c.Assert(handleVal.p.PathPattern, gc.Equals, test.expectPathPattern)
 	}
 }
 
@@ -552,6 +567,7 @@ func (h *testHandlers) M1(p httprequest.Params, arg *struct {
 	h.c.Check(p.Response, gc.Equals, h.p.Response)
 	h.c.Check(p.Request, gc.Equals, h.p.Request)
 	h.c.Check(p.PathVar, gc.DeepEquals, h.p.PathVar)
+	h.c.Check(p.PathPattern, gc.Equals, "/m1/:p")
 }
 
 func (h *testHandlers) M2(arg *struct {
@@ -890,6 +906,7 @@ func (s *handlerSuite) TestHandleErrors(c *gc.C) {
 	handler := errorMapper.HandleErrors(func(p httprequest.Params) error {
 		c.Assert(p.Request, jc.DeepEquals, req)
 		c.Assert(p.PathVar, jc.DeepEquals, params)
+		c.Assert(p.PathPattern, gc.Equals, "")
 		return errUnauth
 	})
 	rec := httptest.NewRecorder()
@@ -905,6 +922,7 @@ func (s *handlerSuite) TestHandleErrors(c *gc.C) {
 	handler = errorMapper.HandleErrors(func(p httprequest.Params) error {
 		c.Assert(p.Request, jc.DeepEquals, req)
 		c.Assert(p.PathVar, jc.DeepEquals, params)
+		c.Assert(p.PathPattern, gc.Equals, "")
 		p.Response.WriteHeader(http.StatusCreated)
 		p.Response.Write([]byte("something"))
 		return nil
@@ -956,6 +974,7 @@ func (s *handlerSuite) TestHandleJSON(c *gc.C) {
 	handler := errorMapper.HandleJSON(func(p httprequest.Params) (interface{}, error) {
 		c.Assert(p.Request, jc.DeepEquals, req)
 		c.Assert(p.PathVar, jc.DeepEquals, params)
+		c.Assert(p.PathPattern, gc.Equals, "")
 		return nil, errUnauth
 	})
 	rec := httptest.NewRecorder()
@@ -971,6 +990,7 @@ func (s *handlerSuite) TestHandleJSON(c *gc.C) {
 	handler = errorMapper.HandleJSON(func(p httprequest.Params) (interface{}, error) {
 		c.Assert(p.Request, jc.DeepEquals, req)
 		c.Assert(p.PathVar, jc.DeepEquals, params)
+		c.Assert(p.PathPattern, gc.Equals, "")
 		p.Response.Header().Set("Some-Header", "value")
 		return "something", nil
 	})

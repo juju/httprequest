@@ -80,9 +80,10 @@ func (e ErrorMapper) Handle(f interface{}) Handler {
 		Path:   rt.path,
 		Handle: func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 			hf(fv, Params{
-				Response: w,
-				Request:  req,
-				PathVar:  p,
+				Response:    w,
+				Request:     req,
+				PathVar:     p,
+				PathPattern: rt.path,
 			})
 		},
 	}
@@ -140,9 +141,10 @@ func (e ErrorMapper) Handlers(f interface{}) []Handler {
 		handler := func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 			terrv := fv.Call([]reflect.Value{
 				reflect.ValueOf(Params{
-					Response: w,
-					Request:  req,
-					PathVar:  p,
+					Response:    w,
+					Request:     req,
+					PathVar:     p,
+					PathPattern: rt.path,
 				}),
 			})
 			tv, errv := terrv[0], terrv[1]
@@ -154,9 +156,10 @@ func (e ErrorMapper) Handlers(f interface{}) []Handler {
 				defer tv.Interface().(io.Closer).Close()
 			}
 			hf(tv.Method(i), Params{
-				Response: w,
-				Request:  req,
-				PathVar:  p,
+				Response:    w,
+				Request:     req,
+				PathVar:     p,
+				PathPattern: rt.path,
 			})
 
 		}
@@ -365,6 +368,9 @@ type ErrorHandler func(Params) error
 // HandleJSON returns a handler that writes the return value of handle
 // as a JSON response. If handle returns an error, it is passed through
 // the error mapper.
+//
+// Note that the Params argument passed to handle will not
+// have its PathPattern set as that information is not available.
 func (e ErrorMapper) HandleJSON(handle JSONHandler) httprouter.Handle {
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 		val, err := handle(Params{
@@ -383,6 +389,9 @@ func (e ErrorMapper) HandleJSON(handle JSONHandler) httprouter.Handle {
 
 // HandleErrors returns a handler that passes any non-nil error returned
 // by handle through the error mapper and writes it as a JSON response.
+//
+// Note that the Params argument passed to handle will not
+// have its PathPattern set as that information is not available.
 func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 		w1 := responseWriter{

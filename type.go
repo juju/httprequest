@@ -38,6 +38,11 @@ type Params struct {
 	Response http.ResponseWriter
 	Request  *http.Request
 	PathVar  httprouter.Params
+	// PathPattern holds the path pattern matched by httprouter.
+	// It is only set where httprequest has the information;
+	// that is where the call was made by ErrorMapper.Handler
+	// or ErrorMapper.Handlers.
+	PathPattern string
 }
 
 // resultMaker is provided to the unmarshal functions.
