@@ -1,3 +1,5 @@
+// +build go1.6
+
 package main
 
 import (
@@ -14,7 +16,7 @@ import (
 	"text/template"
 
 	"golang.org/x/tools/go/loader"
-	"golang.org/x/tools/go/types"
+	"go/types"
 	"gopkg.in/errgo.v1"
 )
 
@@ -42,10 +44,10 @@ func main() {
 }
 
 type templateArg struct {
-	PkgName     string
-	Imports     []string
-	Methods     []method
-	ClientType  string
+	PkgName    string
+	Imports    []string
+	Methods    []method
+	ClientType string
 }
 
 var code = template.Must(template.New("").Parse(`
@@ -98,10 +100,10 @@ func generate(serverPkgPath, serverType, clientType string) error {
 		return errgo.Mask(err)
 	}
 	arg := templateArg{
-		Imports:     imports,
-		Methods:     methods,
-		PkgName:     localPkg.Name,
-		ClientType:  clientType,
+		Imports:    imports,
+		Methods:    methods,
+		PkgName:    localPkg.Name,
+		ClientType: clientType,
 	}
 	var buf bytes.Buffer
 	if err := code.Execute(&buf, arg); err != nil {
