@@ -395,6 +395,25 @@ func (s *clientSuite) TestDoClosesResponseBodyOnError(c *gc.C) {
 	c.Assert(doer.closedBodies, gc.Equals, 1)
 }
 
+func (s *clientSuite) TestDoDoesNotReadRequestBodyAfterReturning(c *gc.C) {
+	body := &largeReader{total: 300 * 1024}
+	// Closing the body will cause a panic under the race
+	// detector if the Do method reads after returning.
+	defer body.Close()
+
+	srv := s.newServer()
+	defer srv.Close()
+
+	req, err := http.NewRequest("GET", "/not-an-endpoint", nil)
+	c.Assert(err, gc.IsNil)
+
+	client := &httprequest.Client{
+		BaseURL: srv.URL,
+	}
+	err = client.Do(req, body, nil)
+	c.Assert(err, gc.ErrorMatches, `GET .*/not-an-endpoint: cannot unmarshal error response \(status 404 Not Found\): unexpected content type text/plain; want application/json; content: 404 page not found`)
+}
+
 func (s *clientSuite) TestGet(c *gc.C) {
 	srv := s.newServer()
 	defer srv.Close()
@@ -616,4 +635,36 @@ type closeCountingReader struct {
 func (r *closeCountingReader) Close() error {
 	r.doer.closedBodies++
 	return r.ReadCloser.Close()
+}
+
+// largeReader implements a reader that produces up to total bytes
+// in 1 byte reads.
+type largeReader struct {
+	total int
+	n     int
+}
+
+func (r *largeReader) Read(buf []byte) (int, error) {
+	if r.n >= r.total {
+		return 0, io.EOF
+	}
+	r.n++
+	return copy(buf, []byte("a")), nil
+}
+
+func (r *largeReader) Seek(offset int64, whence int) (int64, error) {
+	if offset != 0 || whence != 0 {
+		panic("unexpected seek")
+	}
+	r.n = 0
+	return 0, nil
+}
+
+func (r *largeReader) Close() error {
+	// By setting n to zero, we ensure that if there's
+	// a concurrent read, it will also read from n
+	// and so the race detector should pick up the
+	// problem.
+	r.n = 0
+	return nil
 }
