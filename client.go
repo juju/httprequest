@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 
 	"gopkg.in/errgo.v1"
 )
@@ -166,7 +167,14 @@ func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) err
 		httpResp, err = doer1.DoWithBody(req, body)
 	} else {
 		if body != nil {
-			req.Body = ioutil.NopCloser(body)
+			// Work around Go issue 12796 by using a body
+			// that can't be read from after it's been closed,
+			// so if the caller of Do calls body.Close immediately after
+			// Do returns, the http request logic won't be
+			// able to call body.Close or body.Read
+			// because the readStopper will prevent that.
+			req.Body = &readStopper{r: body}
+			defer req.Body.Close()
 		}
 		httpResp, err = doer.Do(req)
 	}
@@ -328,4 +336,37 @@ func appendURL(baseURLStr, relURLStr string) (*url.URL, error) {
 		}
 	}
 	return b, nil
+}
+
+// readStopper implements io.ReadCloser by preventing
+// all reads after Close has been called.
+// This is necessary to work around http://golang.org/issue/12796
+//
+// TODO export this, as it may be useful for other
+// clients of net/http too?
+type readStopper struct {
+	mu sync.Mutex
+	r  io.Reader
+}
+
+func (r *readStopper) Read(buf []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.r == nil {
+		// Note: we have to use io.EOF here because otherwise
+		// another connection can (in rare circumstances) be
+		// polluted by the error returned here. Although this
+		// means the file may appear truncated to the server,
+		// that shouldn't matter because the body will only
+		// be closed after the server has replied.
+		return 0, io.EOF
+	}
+	return r.r.Read(buf)
+}
+
+func (r *readStopper) Close() error {
+	r.mu.Lock()
+	r.r = nil
+	r.mu.Unlock()
+	return nil
 }
