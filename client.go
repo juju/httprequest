@@ -81,6 +81,13 @@ var DefaultErrorUnmarshaler = ErrorUnmarshaler(new(RemoteError))
 //
 // Any error that c.UnmarshalError or c.Doer returns will not
 // have its cause masked.
+//
+// If the request returns a response with a status code signifying
+// success, but the response could not be unmarshaled, a
+// *DecodeResponseError will be returned holding the response. Note that if
+// the request returns an error status code, the Client.UnmarshalError
+// function is responsible for doing this if desired (the default error
+// unmarshal functions do).
 func (c *Client) Call(params, resp interface{}) error {
 	return c.CallURL(c.BaseURL, params, resp)
 }
@@ -143,6 +150,10 @@ func (c *Client) CallURL(url string, params, resp interface{}) error {
 //
 // If req.URL does not have a host part it will be treated as relative to
 // c.BaseURL. req.URL will be updated to the actual URL used.
+//
+// If the response cannot by unmarshaled, a *DecodeResponseError
+// will be returned holding the response from the request.
+// the entire response body.
 func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) error {
 	if req.URL.Host == "" {
 		var err error
@@ -207,7 +218,7 @@ func inferContentLength(req *http.Request, body io.ReadSeeker) {
 	}
 }
 
-// unmarshalResponse unmarshals
+// unmarshalResponse unmarshals an HTTP response into the given value.
 func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) error {
 	if 200 <= httpResp.StatusCode && httpResp.StatusCode < 300 {
 		if respPt, ok := resp.(**http.Response); ok {
@@ -216,7 +227,7 @@ func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) er
 		}
 		defer httpResp.Body.Close()
 		if err := UnmarshalJSONResponse(httpResp, resp); err != nil {
-			return errgo.Notef(err, "%s %s", httpResp.Request.Method, httpResp.Request.URL)
+			return errgo.NoteMask(err, fmt.Sprintf("%s %s", httpResp.Request.Method, httpResp.Request.URL), isDecodeResponseError)
 		}
 		return nil
 	}
@@ -236,6 +247,9 @@ func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) er
 // responses into new values of the same type as template. The argument
 // must be a pointer. A new instance of it is created every time the
 // returned function is called.
+//
+// If the error cannot by unmarshaled, the function will return an
+// *HTTPResponseError holding the response from the request.
 func ErrorUnmarshaler(template error) func(*http.Response) error {
 	t := reflect.TypeOf(template)
 	if t.Kind() != reflect.Ptr {
@@ -246,11 +260,11 @@ func ErrorUnmarshaler(template error) func(*http.Response) error {
 		if 300 <= resp.StatusCode && resp.StatusCode < 400 {
 			// It's a redirection error.
 			loc, _ := resp.Location()
-			return fmt.Errorf("unexpected redirect (status %s) from %q to %q", resp.Status, resp.Request.URL, loc)
+			return newDecodeResponseError(resp, nil, fmt.Errorf("unexpected redirect (status %s) from %q to %q", resp.Status, resp.Request.URL, loc))
 		}
 		errv := reflect.New(t)
 		if err := UnmarshalJSONResponse(resp, errv.Interface()); err != nil {
-			return fmt.Errorf("cannot unmarshal error response (status %s): %v", resp.Status, err)
+			return errgo.NoteMask(err, fmt.Sprintf("cannot unmarshal error response (status %s)", resp.Status), isDecodeResponseError)
 		}
 		return errv.Interface().(error)
 	}
@@ -259,23 +273,46 @@ func ErrorUnmarshaler(template error) func(*http.Response) error {
 // UnmarshalJSONResponse unmarshals the given HTTP response
 // into x, which should be a pointer to the result to be
 // unmarshaled into.
+//
+// If the response cannot be unmarshaled, an error of type
+// *DecodeResponseError will be returned.
 func UnmarshalJSONResponse(resp *http.Response, x interface{}) error {
-	// Try to read all the body so that we can reuse the
-	// connection, but don't try *too* hard.
-	defer io.Copy(ioutil.Discard, io.LimitReader(resp.Body, 8*1024))
 	if x == nil {
 		return nil
 	}
-	if err := checkIsJSON(resp.Header, resp.Body); err != nil {
-		return errgo.Mask(err)
+	if !isJSONMediaType(resp.Header) {
+		fancyErr := newFancyDecodeError(resp.Header, resp.Body)
+		return newDecodeResponseError(resp, fancyErr.body, fancyErr)
 	}
-	// Decode only a single JSON value, and then
-	// discard the rest of the body so that we can
-	// reuse the connection even if some foolish server
-	// has put garbage on the end.
-	dec := json.NewDecoder(resp.Body)
+	// Read enough data that we can produce a plausible-looking
+	// possibly-truncated response body in the error.
+	var buf bytes.Buffer
+	n, err := io.Copy(&buf, io.LimitReader(resp.Body, int64(maxErrorBodySize)))
+
+	bodyData := buf.Bytes()
+	if err != nil {
+		return newDecodeResponseError(resp, bodyData, errgo.Notef(err, "error reading response body"))
+	}
+	if n < int64(maxErrorBodySize) {
+		// We've read all the data; unmarshal it.
+		if err := json.Unmarshal(bodyData, x); err != nil {
+			return newDecodeResponseError(resp, bodyData, err)
+		}
+		return nil
+	}
+	// The response is longer than maxErrorBodySize; stitch the read
+	// bytes together with the body so that we can still read
+	// bodies larger than maxErrorBodySize.
+	dec := json.NewDecoder(io.MultiReader(&buf, resp.Body))
+
+	// Try to read all the body so that we can reuse the
+	// connection, but don't try *too* hard. Note that the
+	// usual number of additional bytes is 1 (a single newline
+	// after the JSON).
+	defer io.Copy(ioutil.Discard, io.LimitReader(resp.Body, 8*1024))
+
 	if err := dec.Decode(x); err != nil {
-		return errgo.Mask(err)
+		return newDecodeResponseError(resp, bodyData, err)
 	}
 	return nil
 }

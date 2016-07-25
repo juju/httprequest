@@ -5,6 +5,7 @@ package httprequest
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -402,16 +403,17 @@ func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
 			Request:  req,
 			PathVar:  p,
 		}); err != nil {
-			// We write the error only if the header hasn't
-			// already been written, because if it has, then
-			// we will not be able to set the appropriate error
-			// response code, and there's a danger that we
-			// may be corrupting output by appending
-			// a JSON error message to it.
-			if !w1.headerWritten {
-				e.WriteError(w, err)
+			if w1.headerWritten {
+				// The header has already been written,
+				// so we can't set the appropriate error
+				// response code and there's a danger
+				// that we may be corrupting the
+				// response by appending a JSON error
+				// message to it.
+				// TODO log an error in this case.
+				return
 			}
-			// TODO log the error?
+			e.WriteError(w, err)
 		}
 	}
 }
@@ -425,7 +427,22 @@ func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
 // HeaderSetter.
 func (e ErrorMapper) WriteError(w http.ResponseWriter, err error) {
 	status, resp := e(err)
-	WriteJSON(w, status, resp)
+	err1 := WriteJSON(w, status, resp)
+	if err1 == nil {
+		return
+	}
+	// TODO log an error ?
+
+	// JSON-marshaling the original error failed, so try to send that
+	// error instead; if that fails, give up and go home.
+	status1, resp1 := e(errgo.Notef(err1, "cannot marshal error response %q", err))
+	err2 := WriteJSON(w, status1, resp1)
+	if err2 == nil {
+		return
+	}
+
+	w.WriteHeader(http.StatusInternalServerError)
+	w.Write([]byte(fmt.Sprintf("really cannot marshal error response %q: %v", err, err1)))
 }
 
 // WriteJSON writes the given value to the ResponseWriter
@@ -442,9 +459,6 @@ func WriteJSON(w http.ResponseWriter, code int, val interface{}) error {
 	// con: if there's an error after the first write, it will be lost.
 	data, err := json.Marshal(val)
 	if err != nil {
-		// TODO(rog) log an error if this fails and lose the
-		// error return, because most callers will need
-		// to do that anyway.
 		return errgo.Mask(err)
 	}
 	w.Header().Set("content-type", "application/json")

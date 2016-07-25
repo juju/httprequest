@@ -1,32 +1,21 @@
-package httprequest_test
+package httprequest
 
 import (
-	"net/http"
 	"strings"
 
 	gc "gopkg.in/check.v1"
-
-	"github.com/juju/httprequest"
 )
 
 type checkIsJSONSuite struct{}
 
 var _ = gc.Suite(&checkIsJSONSuite{})
 
-var checkIsJSONTests = []struct {
+var fancyDecodeErrorTests = []struct {
 	about       string
 	contentType string
 	body        string
 	expectError string
 }{{
-	about:       "simple json",
-	contentType: "application/json",
-	body:        "not json but unread",
-}, {
-	about:       "simple json with charset",
-	contentType: "application/json; charset=UTF-8",
-	body:        "not json but unread",
-}, {
 	about:       "plain text",
 	contentType: "text/plain; charset=UTF-8",
 	body:        "   some\n   text\t\n",
@@ -434,22 +423,13 @@ YUI().use('storefront-cookie', 'storefront-utils', 'user-dropdown',
 	expectError: `unexpected content type text/html; want application/json; content: Page not found | Juju; Jump to content; Store; Demo; About; Features; Community; Docs; Get started; ☰; Create; \+; 404: Sorry, we couldn’t find the page; Try a different URL, try searching for solutions or learn how to; create your own solution; Browse the store; All bundles; All charms; Submit a bug; Browse the store ›; Back to the top; Demo; About; Features; Docs; Get Started; Juju on Google+; Ubuntu Cloud on Twitter; Ubuntu Cloud on Facebook; © 2015 Canonical Ltd. Ubuntu and Canonical are registered trademarks of Canonical Ltd; Legal information; Report a bug on this site; Got to the top of the page`,
 }}
 
-func (checkIsJSONSuite) TestCheckIsJSON(c *gc.C) {
-	*httprequest.MaxErrorBodySize = 16 * 1024
-	for i, test := range checkIsJSONTests {
+func (checkIsJSONSuite) TestFancyDecodeError(c *gc.C) {
+	for i, test := range fancyDecodeErrorTests {
 		c.Logf("test %d: %s", i, test.about)
-		r := strings.NewReader(test.body)
-		err := httprequest.CheckIsJSON(http.Header{
-			"Content-Type": {test.contentType},
-		}, r)
-		if test.expectError == "" {
-			c.Assert(err, gc.IsNil)
-			c.Assert(r.Len(), gc.Equals, len(test.body))
-			continue
+		err := &fancyDecodeError{
+			contentType: test.contentType,
+			body:        []byte(test.body),
 		}
 		c.Assert(err, gc.ErrorMatches, test.expectError)
-		if len(test.body) > *httprequest.MaxErrorBodySize {
-			c.Assert(r.Len(), gc.Equals, *httprequest.MaxErrorBodySize-len(test.body))
-		}
 	}
 }

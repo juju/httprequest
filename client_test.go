@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	"github.com/julienschmidt/httprouter"
 	gc "gopkg.in/check.v1"
@@ -17,7 +18,9 @@ import (
 	"github.com/juju/httprequest"
 )
 
-type clientSuite struct{}
+type clientSuite struct {
+	testing.CleanupSuite
+}
 
 var _ = gc.Suite(&clientSuite{})
 
@@ -26,7 +29,7 @@ var callTests = []struct {
 	client      httprequest.Client
 	req         interface{}
 	expectError string
-	expectCause interface{}
+	assertError func(c *gc.C, err error)
 	expectResp  interface{}
 }{{
 	about: "GET success",
@@ -57,9 +60,11 @@ var callTests = []struct {
 		Body: struct{ I bool }{true},
 	},
 	expectError: `POST http://.*/m2/hello: httprequest: cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal bool into Go value of type int`,
-	expectCause: &httprequest.RemoteError{
-		Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal bool into Go value of type int`,
-		Code:    "bad request",
+	assertError: func(c *gc.C, err error) {
+		c.Assert(errgo.Cause(err), jc.DeepEquals, &httprequest.RemoteError{
+			Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal bool into Go value of type int`,
+			Code:    "bad request",
+		})
 	},
 }, {
 	about: "error unmarshaler returns nil",
@@ -109,6 +114,30 @@ var callTests = []struct {
 	req:         &chM4Req{},
 	expectResp:  new(int),
 	expectError: `GET http://.*/m4: unexpected content type text/plain; want application/json; content: bad response`,
+	assertError: func(c *gc.C, err error) {
+		c.Assert(errgo.Cause(err), gc.FitsTypeOf, (*httprequest.DecodeResponseError)(nil))
+
+		err1 := errgo.Cause(err).(*httprequest.DecodeResponseError)
+		c.Assert(err1.Response, gc.NotNil)
+		data, err := ioutil.ReadAll(err1.Response.Body)
+		c.Assert(err, gc.IsNil)
+		c.Assert(string(data), gc.Equals, "bad response")
+	},
+}, {
+	about:       "bad content in error response",
+	req:         &chM5Req{},
+	expectResp:  new(int),
+	expectError: `GET http://.*/m5: cannot unmarshal error response \(status 418 I'm a teapot\): unexpected content type text/plain; want application/json; content: bad error value`,
+	assertError: func(c *gc.C, err error) {
+		c.Assert(errgo.Cause(err), gc.FitsTypeOf, (*httprequest.DecodeResponseError)(nil))
+
+		err1 := errgo.Cause(err).(*httprequest.DecodeResponseError)
+		c.Assert(err1.Response, gc.NotNil)
+		data, err := ioutil.ReadAll(err1.Response.Body)
+		c.Assert(err, gc.IsNil)
+		c.Assert(string(data), gc.Equals, "bad error value")
+		c.Assert(err1.Response.StatusCode, gc.Equals, http.StatusTeapot)
+	},
 }}
 
 func (s *clientSuite) TestCall(c *gc.C) {
@@ -126,8 +155,8 @@ func (s *clientSuite) TestCall(c *gc.C) {
 		err := client.Call(test.req, resp)
 		if test.expectError != "" {
 			c.Assert(err, gc.ErrorMatches, test.expectError)
-			if test.expectCause != nil {
-				c.Assert(errgo.Cause(err), jc.DeepEquals, test.expectCause)
+			if test.assertError != nil {
+				test.assertError(c, err)
 			}
 			continue
 		}
@@ -396,7 +425,7 @@ func (s *clientSuite) TestDoClosesResponseBodyOnError(c *gc.C) {
 }
 
 func (s *clientSuite) TestDoDoesNotReadRequestBodyAfterReturning(c *gc.C) {
-	body := &largeReader{total: 300 * 1024}
+	body := &largeReader{byte: 'a', total: 300 * 1024}
 	// Closing the body will cause a panic under the race
 	// detector if the Do method reads after returning.
 	defer body.Close()
@@ -434,6 +463,113 @@ func (s *clientSuite) TestGetNoBaseURL(c *gc.C) {
 	err := client.Get(srv.URL+"/m1/foo", &resp)
 	c.Assert(err, gc.IsNil)
 	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
+}
+
+func (s *clientSuite) TestUnmarshalJSONResponseWithBodyReadError(c *gc.C) {
+	resp := &http.Response{
+		Header: http.Header{
+			"Content-Type": {"application/json"},
+		},
+		StatusCode: http.StatusOK,
+		Body: ioutil.NopCloser(io.MultiReader(
+			strings.NewReader(`{"one": "two"}`),
+			errorReader("some bad read"),
+		)),
+	}
+	var val map[string]string
+	err := httprequest.UnmarshalJSONResponse(resp, &val)
+	c.Assert(err, gc.ErrorMatches, `error reading response body: some bad read`)
+	c.Assert(val, gc.IsNil)
+	assertDecodeResponseError(c, err, http.StatusOK, `{"one": "two"}`)
+}
+
+func (s *clientSuite) TestUnmarshalJSONResponseWithBadContentType(c *gc.C) {
+	resp := &http.Response{
+		Header: http.Header{
+			"Content-Type": {"foo/bar"},
+		},
+		StatusCode: http.StatusTeapot,
+		Body:       ioutil.NopCloser(strings.NewReader(`something or other`)),
+	}
+	var val map[string]string
+	err := httprequest.UnmarshalJSONResponse(resp, &val)
+	c.Assert(err, gc.ErrorMatches, `unexpected content type foo/bar; want application/json; content: "something or other"`)
+	c.Assert(val, gc.IsNil)
+	assertDecodeResponseError(c, err, http.StatusTeapot, `something or other`)
+}
+
+func (s *clientSuite) TestUnmarshalJSONResponseWithErrorAndLargeBody(c *gc.C) {
+	s.PatchValue(httprequest.MaxErrorBodySize, 11)
+
+	resp := &http.Response{
+		Header: http.Header{
+			"Content-Type": {"foo/bar"},
+		},
+		StatusCode: http.StatusOK,
+		Body:       ioutil.NopCloser(strings.NewReader(`123456789 123456789`)),
+	}
+	var val map[string]string
+	err := httprequest.UnmarshalJSONResponse(resp, &val)
+	c.Assert(err, gc.ErrorMatches, `unexpected content type foo/bar; want application/json; content: "123456789 1"`)
+	c.Assert(val, gc.IsNil)
+	assertDecodeResponseError(c, err, http.StatusOK, `123456789 1`)
+}
+
+func (s *clientSuite) TestUnmarshalJSONResponseWithLargeBody(c *gc.C) {
+	s.PatchValue(httprequest.MaxErrorBodySize, 11)
+
+	resp := &http.Response{
+		Header: http.Header{
+			"Content-Type": {"application/json"},
+		},
+		StatusCode: http.StatusOK,
+		Body:       ioutil.NopCloser(strings.NewReader(`"23456789 123456789"`)),
+	}
+	var val string
+	err := httprequest.UnmarshalJSONResponse(resp, &val)
+	c.Assert(err, gc.IsNil)
+	c.Assert(val, gc.Equals, "23456789 123456789")
+}
+
+func (s *clientSuite) TestUnmarshalJSONWithDecodeError(c *gc.C) {
+	resp := &http.Response{
+		Header: http.Header{
+			"Content-Type": {"application/json"},
+		},
+		StatusCode: http.StatusOK,
+		Body:       ioutil.NopCloser(strings.NewReader(`{"one": "two"}`)),
+	}
+	var val chan string
+	err := httprequest.UnmarshalJSONResponse(resp, &val)
+	c.Assert(err, gc.ErrorMatches, `json: cannot unmarshal object into Go value of type chan string`)
+	c.Assert(val, gc.IsNil)
+	assertDecodeResponseError(c, err, http.StatusOK, `{"one": "two"}`)
+}
+
+func (s *clientSuite) TestUnmarshalJSONWithDecodeErrorAndLargeBody(c *gc.C) {
+	s.PatchValue(httprequest.MaxErrorBodySize, 11)
+
+	resp := &http.Response{
+		Header: http.Header{
+			"Content-Type": {"application/json"},
+		},
+		StatusCode: http.StatusOK,
+		Body:       ioutil.NopCloser(strings.NewReader(`"23456789 123456789"`)),
+	}
+	var val chan string
+	err := httprequest.UnmarshalJSONResponse(resp, &val)
+	c.Assert(err, gc.ErrorMatches, `json: cannot unmarshal string into Go value of type chan string`)
+	c.Assert(val, gc.IsNil)
+	assertDecodeResponseError(c, err, http.StatusOK, `"23456789 1`)
+}
+
+func assertDecodeResponseError(c *gc.C, err error, status int, body string) {
+	c.Assert(errgo.Cause(err), gc.FitsTypeOf, (*httprequest.DecodeResponseError)(nil))
+	err1 := errgo.Cause(err).(*httprequest.DecodeResponseError)
+	data, err := ioutil.ReadAll(err1.Response.Body)
+	c.Assert(err, gc.IsNil)
+	c.Assert(err1.Response.StatusCode, gc.Equals, status)
+	c.Assert(string(data), gc.Equals, body)
 }
 
 func (*clientSuite) newServer() *httptest.Server {
@@ -574,6 +710,15 @@ func (clientHandlers) M4(p httprequest.Params, _ *chM4Req) {
 	p.Response.Write([]byte("bad response"))
 }
 
+type chM5Req struct {
+	httprequest.Route `httprequest:"GET /m5"`
+}
+
+func (clientHandlers) M5(p httprequest.Params, _ *chM5Req) {
+	p.Response.WriteHeader(http.StatusTeapot)
+	p.Response.Write([]byte("bad error value"))
+}
+
 type chContentLengthReq struct {
 	httprequest.Route `httprequest:"PUT /content-length"`
 }
@@ -640,6 +785,7 @@ func (r *closeCountingReader) Close() error {
 // largeReader implements a reader that produces up to total bytes
 // in 1 byte reads.
 type largeReader struct {
+	byte  byte
 	total int
 	n     int
 }
@@ -649,7 +795,7 @@ func (r *largeReader) Read(buf []byte) (int, error) {
 		return 0, io.EOF
 	}
 	r.n++
-	return copy(buf, []byte("a")), nil
+	return copy(buf, []byte{r.byte}), nil
 }
 
 func (r *largeReader) Seek(offset int64, whence int) (int64, error) {
