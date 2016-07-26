@@ -157,8 +157,10 @@ func unmarshalString(tag tag) unmarshaler {
 // unmarshalBody unmarshals the http request body
 // into the given value.
 func unmarshalBody(v reflect.Value, p Params, makeResult resultMaker) error {
-	if err := checkIsJSON(p.Request.Header, p.Request.Body); err != nil {
-		return errgo.Mask(err)
+	if !isJSONMediaType(p.Request.Header) {
+		fancyErr := newFancyDecodeError(p.Request.Header, p.Request.Body)
+
+		return newDecodeRequestError(p.Request, fancyErr.body, fancyErr)
 	}
 	data, err := ioutil.ReadAll(p.Request.Body)
 	if err != nil {

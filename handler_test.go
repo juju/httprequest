@@ -341,14 +341,14 @@ var handleTests = []struct {
 }, {
 	about: "return type that can't be marshaled as JSON",
 	f: func(c *gc.C) interface{} {
-		return func(p httprequest.Params, s *struct{}) (map[int]int, error) {
-			return map[int]int{0: 1}, nil
+		return func(p httprequest.Params, s *struct{}) (chan int, error) {
+			return make(chan int), nil
 		}
 	},
 	req:     &http.Request{},
 	pathVar: httprouter.Params{},
 	expectBody: httprequest.RemoteError{
-		Message: "json: unsupported type: map[int]int",
+		Message: "json: unsupported type: chan int",
 	},
 	expectStatus: http.StatusInternalServerError,
 }, {
@@ -785,11 +785,12 @@ func (*handlerSuite) TestWriteJSON(c *gc.C) {
 }
 
 var (
-	errUnauth        = errors.New("unauth")
-	errBadReq        = errors.New("bad request")
-	errOther         = errors.New("other")
-	errCustomHeaders = errors.New("custom headers")
-	errNil           = errors.New("nil result")
+	errUnauth             = errors.New("unauth")
+	errBadReq             = errors.New("bad request")
+	errOther              = errors.New("other")
+	errCustomHeaders      = errors.New("custom headers")
+	errUnmarshalableError = errors.New("unmarshalable error")
+	errNil                = errors.New("nil result")
 )
 
 type HeaderNumber struct {
@@ -833,6 +834,8 @@ var errorMapper httprequest.ErrorMapper = func(err error) (int, interface{}) {
 				h.Set("Acceptability", "not at all")
 			},
 		}
+	case errUnmarshalableError:
+		return http.StatusTeapot, make(chan int)
 	case errNil:
 		return status, nil
 	}
@@ -875,6 +878,12 @@ var writeErrorTests = []struct {
 	},
 	expectHeader: http.Header{
 		"Acceptability": {"not at all"},
+	},
+}, {
+	err:          errUnmarshalableError,
+	expectStatus: http.StatusInternalServerError,
+	expectResp: &httprequest.RemoteError{
+		Message: `cannot marshal error response "unmarshalable error": json: unsupported type: chan int`,
 	},
 }}
 
