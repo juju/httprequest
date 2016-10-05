@@ -59,7 +59,7 @@ var callTests = []struct {
 		P:    "hello",
 		Body: struct{ I bool }{true},
 	},
-	expectError: `POST http://.*/m2/hello: httprequest: cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal bool into Go value of type int`,
+	expectError: `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal bool into Go value of type int`,
 	assertError: func(c *gc.C, err error) {
 		c.Assert(errgo.Cause(err), jc.DeepEquals, &httprequest.RemoteError{
 			Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal bool into Go value of type int`,
@@ -154,7 +154,7 @@ func (s *clientSuite) TestCall(c *gc.C) {
 		client.BaseURL = srv.URL
 		err := client.Call(test.req, resp)
 		if test.expectError != "" {
-			c.Assert(err, gc.ErrorMatches, test.expectError)
+			c.Check(err, gc.ErrorMatches, test.expectError)
 			if test.assertError != nil {
 				test.assertError(c, err)
 			}
@@ -337,7 +337,7 @@ func (s *clientSuite) TestDoWithHTTPReponseAndError(c *gc.C) {
 	var resp *http.Response
 	err := client.Get("/m3", &resp)
 	c.Assert(resp, gc.IsNil)
-	c.Assert(err, gc.ErrorMatches, `GET http://.*/m3: httprequest: m3 error`)
+	c.Assert(err, gc.ErrorMatches, `m3 error`)
 	c.Assert(doer.openedBodies, gc.Equals, 1)
 	c.Assert(doer.closedBodies, gc.Equals, 1)
 }
