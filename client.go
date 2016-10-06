@@ -238,9 +238,21 @@ func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) er
 	}
 	err := errUnmarshaler(httpResp)
 	if err == nil {
-		err = errgo.Newf("unexpected HTTP response status: %s", httpResp.Status)
+		err = errgo.Newf(
+			"%s %s: unexpected HTTP response status: %s",
+			httpResp.Request.Method,
+			httpResp.Request.URL.String(),
+			httpResp.Status,
+		)
 	}
-	return errgo.NoteMask(err, httpResp.Request.Method+" "+httpResp.Request.URL.String(), errgo.Any)
+	if isDecodeResponseError(err) || isDecodeResponseError(errgo.Cause(err)) {
+		return errgo.NoteMask(
+			err,
+			httpResp.Request.Method+" "+httpResp.Request.URL.String(),
+			errgo.Any,
+		)
+	}
+	return err
 }
 
 // ErrorUnmarshaler returns a function which will unmarshal error
@@ -336,7 +348,7 @@ func (e *RemoteError) Error() string {
 	if e.Message == "" {
 		return "httprequest: no error message found"
 	}
-	return "httprequest: " + e.Message
+	return e.Message
 }
 
 // appendURL returns the result of combining the
