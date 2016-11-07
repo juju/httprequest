@@ -913,9 +913,13 @@ func (s *handlerSuite) TestHandleErrors(c *gc.C) {
 	params := httprouter.Params{}
 	// Test when handler returns an error.
 	handler := errorMapper.HandleErrors(func(p httprequest.Params) error {
-		c.Assert(p.Request, jc.DeepEquals, req)
+		assertRequestEquals(c, p.Request, req)
 		c.Assert(p.PathVar, jc.DeepEquals, params)
 		c.Assert(p.PathPattern, gc.Equals, "")
+		ctx := p.Context
+		c.Assert(ctx, gc.Not(gc.IsNil))
+		uuid := httprequest.RequestUUID(ctx)
+		c.Assert(uuid, gc.Not(gc.Equals), "")
 		return errUnauth
 	})
 	rec := httptest.NewRecorder()
@@ -929,9 +933,13 @@ func (s *handlerSuite) TestHandleErrors(c *gc.C) {
 
 	// Test when handler returns nil.
 	handler = errorMapper.HandleErrors(func(p httprequest.Params) error {
-		c.Assert(p.Request, jc.DeepEquals, req)
+		assertRequestEquals(c, p.Request, req)
 		c.Assert(p.PathVar, jc.DeepEquals, params)
 		c.Assert(p.PathPattern, gc.Equals, "")
+		ctx := p.Context
+		c.Assert(ctx, gc.Not(gc.IsNil))
+		uuid := httprequest.RequestUUID(ctx)
+		c.Assert(uuid, gc.Not(gc.Equals), "")
 		p.Response.WriteHeader(http.StatusCreated)
 		p.Response.Write([]byte("something"))
 		return nil
@@ -981,7 +989,7 @@ func (s *handlerSuite) TestHandleJSON(c *gc.C) {
 	params := httprouter.Params{}
 	// Test when handler returns an error.
 	handler := errorMapper.HandleJSON(func(p httprequest.Params) (interface{}, error) {
-		c.Assert(p.Request, jc.DeepEquals, req)
+		assertRequestEquals(c, p.Request, req)
 		c.Assert(p.PathVar, jc.DeepEquals, params)
 		c.Assert(p.PathPattern, gc.Equals, "")
 		return nil, errUnauth
@@ -997,7 +1005,7 @@ func (s *handlerSuite) TestHandleJSON(c *gc.C) {
 
 	// Test when handler returns a body.
 	handler = errorMapper.HandleJSON(func(p httprequest.Params) (interface{}, error) {
-		c.Assert(p.Request, jc.DeepEquals, req)
+		assertRequestEquals(c, p.Request, req)
 		c.Assert(p.PathVar, jc.DeepEquals, params)
 		c.Assert(p.PathPattern, gc.Equals, "")
 		p.Response.Header().Set("Some-Header", "value")
@@ -1008,4 +1016,26 @@ func (s *handlerSuite) TestHandleJSON(c *gc.C) {
 	c.Assert(rec.Code, gc.Equals, http.StatusOK)
 	c.Assert(rec.Body.String(), gc.Equals, `"something"`)
 	c.Assert(rec.Header().Get("Some-Header"), gc.Equals, "value")
+}
+
+func assertRequestEquals(c *gc.C, req1, req2 *http.Request) {
+	c.Assert(req1.Method, gc.Equals, req2.Method)
+	c.Assert(req1.URL, jc.DeepEquals, req2.URL)
+	c.Assert(req1.Proto, gc.Equals, req2.Proto)
+	c.Assert(req1.ProtoMajor, gc.Equals, req2.ProtoMajor)
+	c.Assert(req1.ProtoMinor, gc.Equals, req2.ProtoMinor)
+	c.Assert(req1.Header, jc.DeepEquals, req2.Header)
+	c.Assert(req1.Body, gc.Equals, req2.Body)
+	c.Assert(req1.ContentLength, gc.Equals, req2.ContentLength)
+	c.Assert(req1.TransferEncoding, jc.DeepEquals, req2.TransferEncoding)
+	c.Assert(req1.Close, gc.Equals, req2.Close)
+	c.Assert(req1.Host, gc.Equals, req2.Host)
+	c.Assert(req1.Form, jc.DeepEquals, req2.Form)
+	c.Assert(req1.PostForm, jc.DeepEquals, req2.PostForm)
+	c.Assert(req1.MultipartForm, jc.DeepEquals, req2.MultipartForm)
+	c.Assert(req1.Trailer, jc.DeepEquals, req2.Trailer)
+	c.Assert(req1.RemoteAddr, gc.Equals, req2.RemoteAddr)
+	c.Assert(req1.RequestURI, gc.Equals, req2.RequestURI)
+	c.Assert(req1.TLS, gc.Equals, req2.TLS)
+	c.Assert(req1.Cancel, gc.Equals, req2.Cancel)
 }

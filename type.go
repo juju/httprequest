@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/julienschmidt/httprouter"
+	"golang.org/x/net/context"
 	"gopkg.in/errgo.v1"
 )
 
@@ -43,6 +44,10 @@ type Params struct {
 	// that is where the call was made by ErrorMapper.Handler
 	// or ErrorMapper.Handlers.
 	PathPattern string
+	// Context holds a context for the request. On go version 1.7 and
+	// above this will be the same as the value returned by
+	// Request.Context().
+	Context context.Context
 }
 
 // resultMaker is provided to the unmarshal functions.

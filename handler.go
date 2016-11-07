@@ -80,11 +80,14 @@ func (e ErrorMapper) Handle(f interface{}) Handler {
 		Method: rt.method,
 		Path:   rt.path,
 		Handle: func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
+			ctx, req, cancel := contextFromRequest(req)
+			defer cancel()
 			hf(fv, Params{
 				Response:    w,
 				Request:     req,
 				PathVar:     p,
 				PathPattern: rt.path,
+				Context:     ctx,
 			})
 		},
 	}
@@ -140,12 +143,15 @@ func (e ErrorMapper) Handlers(f interface{}) []Handler {
 			panic(errgo.Notef(err, "method %s does not specify route method and path", m.Name))
 		}
 		handler := func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
+			ctx, req, cancel := contextFromRequest(req)
+			defer cancel()
 			terrv := fv.Call([]reflect.Value{
 				reflect.ValueOf(Params{
 					Response:    w,
 					Request:     req,
 					PathVar:     p,
 					PathPattern: rt.path,
+					Context:     ctx,
 				}),
 			})
 			tv, errv := terrv[0], terrv[1]
@@ -161,6 +167,7 @@ func (e ErrorMapper) Handlers(f interface{}) []Handler {
 				Request:     req,
 				PathVar:     p,
 				PathPattern: rt.path,
+				Context:     ctx,
 			})
 
 		}
@@ -374,10 +381,13 @@ type ErrorHandler func(Params) error
 // have its PathPattern set as that information is not available.
 func (e ErrorMapper) HandleJSON(handle JSONHandler) httprouter.Handle {
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
+		ctx, req, cancel := contextFromRequest(req)
+		defer cancel()
 		val, err := handle(Params{
 			Response: headerOnlyResponseWriter{w.Header()},
 			Request:  req,
 			PathVar:  p,
+			Context:  ctx,
 		})
 		if err == nil {
 			if err = WriteJSON(w, http.StatusOK, val); err == nil {
@@ -398,10 +408,13 @@ func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
 		w1 := responseWriter{
 			ResponseWriter: w,
 		}
+		ctx, req, cancel := contextFromRequest(req)
+		defer cancel()
 		if err := handle(Params{
 			Response: &w1,
 			Request:  req,
 			PathVar:  p,
+			Context:  ctx,
 		}); err != nil {
 			if w1.headerWritten {
 				// The header has already been written,
