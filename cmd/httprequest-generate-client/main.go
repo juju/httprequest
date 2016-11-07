@@ -15,8 +15,8 @@ import (
 	"strings"
 	"text/template"
 
-	"golang.org/x/tools/go/loader"
 	"go/types"
+	"golang.org/x/tools/go/loader"
 	"gopkg.in/errgo.v1"
 )
 
