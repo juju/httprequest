@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 
+	"golang.org/x/net/context"
 	"gopkg.in/errgo.v1"
 )
 
@@ -22,6 +23,12 @@ import (
 // by http.Client and httpbakery.Client.
 type Doer interface {
 	Do(req *http.Request) (*http.Response, error)
+}
+
+// DoerWithContext is implemented by HTTP clients that can use a context
+// with the HTTP request.
+type DoerWithContext interface {
+	DoWithContext(ctx context.Context, req *http.Request) (*http.Response, error)
 }
 
 // Client represents a client that can invoke httprequest endpoints.
@@ -75,13 +82,13 @@ var DefaultErrorUnmarshaler = ErrorUnmarshaler(new(RemoteError))
 // the request returns an error status code, the Client.UnmarshalError
 // function is responsible for doing this if desired (the default error
 // unmarshal functions do).
-func (c *Client) Call(params, resp interface{}) error {
-	return c.CallURL(c.BaseURL, params, resp)
+func (c *Client) Call(ctx context.Context, params, resp interface{}) error {
+	return c.CallURL(ctx, c.BaseURL, params, resp)
 }
 
 // CallURL is like Call except that the given URL is used instead of
 // c.BaseURL.
-func (c *Client) CallURL(url string, params, resp interface{}) error {
+func (c *Client) CallURL(ctx context.Context, url string, params, resp interface{}) error {
 	rt, err := getRequestType(reflect.TypeOf(params))
 	if err != nil {
 		return errgo.Mask(err)
@@ -97,7 +104,7 @@ func (c *Client) CallURL(url string, params, resp interface{}) error {
 	if err != nil {
 		return errgo.Mask(err)
 	}
-	return c.Do(req, resp)
+	return c.Do(ctx, req, resp)
 }
 
 // Do sends the given request and unmarshals its JSON
@@ -122,7 +129,7 @@ func (c *Client) CallURL(url string, params, resp interface{}) error {
 // If the response cannot by unmarshaled, a *DecodeResponseError
 // will be returned holding the response from the request.
 // the entire response body.
-func (c *Client) Do(req *http.Request, resp interface{}) error {
+func (c *Client) Do(ctx context.Context, req *http.Request, resp interface{}) error {
 	if req.URL.Host == "" {
 		var err error
 		req.URL, err = appendURL(c.BaseURL, req.URL.String())
@@ -130,11 +137,22 @@ func (c *Client) Do(req *http.Request, resp interface{}) error {
 			return errgo.Mask(err)
 		}
 	}
+	if req.Header.Get(RequestUUIDHeader) == "" {
+		if uuid := RequestUUIDFromContext(ctx); uuid != "" {
+			req.Header.Set(RequestUUIDHeader, uuid)
+		}
+	}
 	doer := c.Doer
 	if doer == nil {
 		doer = http.DefaultClient
 	}
-	httpResp, err := doer.Do(req)
+	var httpResp *http.Response
+	var err error
+	if ctxDoer, ok := doer.(DoerWithContext); ok {
+		httpResp, err = ctxDoer.DoWithContext(ctx, req)
+	} else {
+		httpResp, err = doer.Do(requestWithContext(req, ctx))
+	}
 	if err != nil {
 		return errgo.NoteMask(err, fmt.Sprintf("%s %s", req.Method, req.URL), errgo.Any)
 	}
@@ -144,12 +162,12 @@ func (c *Client) Do(req *http.Request, resp interface{}) error {
 // Get is a convenience method that uses c.Do to issue a GET request to
 // the given URL. If the given URL does not have a host part then it will
 // be treated as relative to c.BaseURL.
-func (c *Client) Get(url string, resp interface{}) error {
+func (c *Client) Get(ctx context.Context, url string, resp interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return errgo.Notef(err, "cannot make request")
 	}
-	return c.Do(req, resp)
+	return c.Do(ctx, req, resp)
 }
 
 // unmarshalResponse unmarshals an HTTP response into the given value.

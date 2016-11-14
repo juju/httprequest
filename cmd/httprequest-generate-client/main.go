@@ -67,15 +67,15 @@ type {{.ClientType}} struct {
 {{range .Methods}}
 {{if .RespType}}
 	{{.Doc}}
-	func (c *{{$.ClientType}}) {{.Name}}(p *{{.ParamType}}) ({{.RespType}}, error) {
+	func (c *{{$.ClientType}}) {{.Name}}(ctx context.Context, p *{{.ParamType}}) ({{.RespType}}, error) {
 		var r {{.RespType}}
-		err := c.Client.Call(p, &r)
+		err := c.Client.Call(ctx, p, &r)
 		return r, err
 	}
 {{else}}
 	{{.Doc}}
-	func (c *{{$.ClientType}}) {{.Name}}(p *{{.ParamType}}) (error) {
-		return c.Client.Call(p, nil)
+	func (c *{{$.ClientType}}) {{.Name}}(ctx context.Context, p *{{.ParamType}}) (error) {
+		return c.Client.Call(ctx, p, nil)
 	}
 {{end}}
 {{end}}
@@ -166,6 +166,7 @@ func serverMethods(serverPkg, serverType, localPkg string) ([]method, []string, 
 
 	imports := map[string]string{
 		"github.com/juju/httprequest": "httprequest",
+		"golang.org/x/net/context":    "context",
 		localPkg:                      "",
 	}
 	var methods []method

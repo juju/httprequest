@@ -13,30 +13,33 @@ import (
 
 // RequestUUIDHeader contains the name of the header used to store the
 // request UUID.
-const RequestUUIDHeader = "Request-UUID"
+const RequestUUIDHeader = "Request-Uuid"
 
 var uuidGen = fastuuid.MustNewGenerator()
 
 type requestUUIDContextKey struct{}
 
-// RequestUUID returns the unique identifier of the request. This will
-// have either been taken from a Request-UUID header or assigned when
-// the request is initially processed by httprequest. If the given
-// context doesn't contain a request UUID then the return value will be
-// the empty string.
-func RequestUUID(ctx context.Context) string {
+// RequestUUIDFromContext returns the unique identifier of the request.
+// This will have either been taken from a Request-UUID header or
+// assigned when the request is initially processed by httprequest. If
+// the given context doesn't contain a request UUID then the return value
+// will be the empty string.
+func RequestUUIDFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(requestUUIDContextKey{}).(string)
 	return v
 }
 
-// contextWithRequestUUID adds a request UUID to the given context. The request
-// UUID either comes from a Request-UUID header in the given Request,
-// or generates a random UUID.
-func contextWithRequestUUID(ctx context.Context, req *http.Request) context.Context {
-	uuid := req.Header.Get(RequestUUIDHeader)
-	if uuid == "" {
-		bytes := uuidGen.Next()
-		uuid = fmt.Sprintf("%x", bytes)
-	}
+// ContextWithRequestUUID adds the given request UUID to the given context.
+func ContextWithRequestUUID(ctx context.Context, uuid string) context.Context {
 	return context.WithValue(ctx, requestUUIDContextKey{}, uuid)
+}
+
+// uuidFromRequest gets a UUID for the request. If a Request-UUID header
+// is present then the UUID will be taken from that otherwise a new
+// random UUID will be generated.
+func uuidFromRequest(req *http.Request) string {
+	if uuid := req.Header.Get(RequestUUIDHeader); uuid != "" {
+		return uuid
+	}
+	return fmt.Sprintf("%x", uuidGen.Next())
 }

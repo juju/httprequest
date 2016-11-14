@@ -13,6 +13,10 @@ import (
 
 func contextFromRequest(req *http.Request) (context.Context, *http.Request, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx = contextWithRequestUUID(ctx, req)
+	ctx = ContextWithRequestUUID(ctx, uuidFromRequest(req))
 	return ctx, req, cancel
+}
+
+func requestWithContext(req *http.Request, _ context.Context) *http.Request {
+	return req
 }
