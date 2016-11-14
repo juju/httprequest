@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
-	"sync"
 
 	"gopkg.in/errgo.v1"
 )
@@ -21,20 +20,8 @@ import (
 // Doer is implemented by HTTP client packages
 // to make an HTTP request. It is notably implemented
 // by http.Client and httpbakery.Client.
-//
-// When httprequest uses a Doer value for requests
-// with a non-empty body, it will use DoWithBody if
-// the value implements it (see DoerWithBody).
-// This enables httpbakery.Client to be used correctly.
 type Doer interface {
 	Do(req *http.Request) (*http.Response, error)
-}
-
-// DoerWithBody is implemented by HTTP clients that need
-// to be able to retry HTTP requests with a body.
-// It is notably implemented by httpbakery.Client.
-type DoerWithBody interface {
-	DoWithBody(req *http.Request, body io.ReadSeeker) (*http.Response, error)
 }
 
 // Client represents a client that can invoke httprequest endpoints.
@@ -110,32 +97,13 @@ func (c *Client) CallURL(url string, params, resp interface{}) error {
 	if err != nil {
 		return errgo.Mask(err)
 	}
-
-	// Actually make the request.
-	doer := c.Doer
-	if doer == nil {
-		doer = http.DefaultClient
-	}
-	var httpResp *http.Response
-	body := req.Body.(BytesReaderCloser)
-	// Always use DoWithBody when available.
-	if doer1, ok := doer.(DoerWithBody); ok {
-		req.Body = nil
-		httpResp, err = doer1.DoWithBody(req, body)
-	} else {
-		httpResp, err = doer.Do(req)
-	}
-	if err != nil {
-		return errgo.Mask(err, errgo.Any)
-	}
-	return c.unmarshalResponse(httpResp, resp)
+	return c.Do(req, resp)
 }
 
 // Do sends the given request and unmarshals its JSON
 // result into resp, which should be a pointer to the response value.
 // If an error status is returned, the error will be unmarshaled
-// as in Client.Call. The req.Body field must be nil - any request
-// body should be provided in the body parameter.
+// as in Client.Call.
 //
 // If resp is nil, the response will be ignored if the response was
 // successful.
@@ -154,7 +122,7 @@ func (c *Client) CallURL(url string, params, resp interface{}) error {
 // If the response cannot by unmarshaled, a *DecodeResponseError
 // will be returned holding the response from the request.
 // the entire response body.
-func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) error {
+func (c *Client) Do(req *http.Request, resp interface{}) error {
 	if req.URL.Host == "" {
 		var err error
 		req.URL, err = appendURL(c.BaseURL, req.URL.String())
@@ -162,33 +130,11 @@ func (c *Client) Do(req *http.Request, body io.ReadSeeker, resp interface{}) err
 			return errgo.Mask(err)
 		}
 	}
-	if req.Body != nil {
-		return errgo.Newf("%s %s: request body supplied unexpectedly", req.Method, req.URL)
-	}
-	inferContentLength(req, body)
 	doer := c.Doer
 	if doer == nil {
 		doer = http.DefaultClient
 	}
-	var httpResp *http.Response
-	var err error
-	// Use DoWithBody when it's available and body is not nil.
-	doer1, ok := doer.(DoerWithBody)
-	if ok && body != nil {
-		httpResp, err = doer1.DoWithBody(req, body)
-	} else {
-		if body != nil {
-			// Work around Go issue 12796 by using a body
-			// that can't be read from after it's been closed,
-			// so if the caller of Do calls body.Close immediately after
-			// Do returns, the http request logic won't be
-			// able to call body.Close or body.Read
-			// because the readStopper will prevent that.
-			req.Body = &readStopper{r: body}
-			defer req.Body.Close()
-		}
-		httpResp, err = doer.Do(req)
-	}
+	httpResp, err := doer.Do(req)
 	if err != nil {
 		return errgo.NoteMask(err, fmt.Sprintf("%s %s", req.Method, req.URL), errgo.Any)
 	}
@@ -203,19 +149,7 @@ func (c *Client) Get(url string, resp interface{}) error {
 	if err != nil {
 		return errgo.Notef(err, "cannot make request")
 	}
-	return c.Do(req, nil, resp)
-}
-
-func inferContentLength(req *http.Request, body io.ReadSeeker) {
-	if body == nil {
-		return
-	}
-	switch v := body.(type) {
-	case *bytes.Reader:
-		req.ContentLength = int64(v.Len())
-	case *strings.Reader:
-		req.ContentLength = int64(v.Len())
-	}
+	return c.Do(req, resp)
 }
 
 // unmarshalResponse unmarshals an HTTP response into the given value.
@@ -385,37 +319,4 @@ func appendURL(baseURLStr, relURLStr string) (*url.URL, error) {
 		}
 	}
 	return b, nil
-}
-
-// readStopper implements io.ReadCloser by preventing
-// all reads after Close has been called.
-// This is necessary to work around http://golang.org/issue/12796
-//
-// TODO export this, as it may be useful for other
-// clients of net/http too?
-type readStopper struct {
-	mu sync.Mutex
-	r  io.Reader
-}
-
-func (r *readStopper) Read(buf []byte) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.r == nil {
-		// Note: we have to use io.EOF here because otherwise
-		// another connection can (in rare circumstances) be
-		// polluted by the error returned here. Although this
-		// means the file may appear truncated to the server,
-		// that shouldn't matter because the body will only
-		// be closed after the server has replied.
-		return 0, io.EOF
-	}
-	return r.r.Read(buf)
-}
-
-func (r *readStopper) Close() error {
-	r.mu.Lock()
-	r.r = nil
-	r.mu.Unlock()
-	return nil
 }
