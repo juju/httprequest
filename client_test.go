@@ -1,6 +1,7 @@
 package httprequest_test
 
 import (
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	"github.com/julienschmidt/httprouter"
+	"golang.org/x/net/context"
+	"golang.org/x/net/context/ctxhttp"
 	gc "gopkg.in/check.v1"
 	"gopkg.in/errgo.v1"
 
@@ -27,6 +30,7 @@ var callTests = []struct {
 	about       string
 	client      httprequest.Client
 	req         interface{}
+	requestUUID string
 	expectError string
 	assertError func(c *gc.C, err error)
 	expectResp  interface{}
@@ -107,6 +111,65 @@ var callTests = []struct {
 		c.Assert(string(data), gc.Equals, "bad error value")
 		c.Assert(err1.Response.StatusCode, gc.Equals, http.StatusTeapot)
 	},
+}, {
+	about: "doer with context",
+	client: httprequest.Client{
+		Doer: doerWithContextFunc(func(ctx context.Context, req *http.Request) (*http.Response, error) {
+			if ctx == nil {
+				panic("Do called when DoWithContext expected")
+			}
+			return ctxhttp.Do(ctx, http.DefaultClient, req)
+		}),
+	},
+	req: &chM2Req{
+		P:    "hello",
+		Body: struct{ I int }{999},
+	},
+	expectResp: &chM2Resp{"hello", 999},
+}, {
+	about: "doer with context and body",
+	client: httprequest.Client{
+		Doer: doerWithContextFunc(func(ctx context.Context, req *http.Request) (*http.Response, error) {
+			if ctx == nil {
+				panic("Do called when DoWithContext expected")
+			}
+			return ctxhttp.Do(ctx, http.DefaultClient, req)
+		}),
+	},
+	req: &chM2Req{
+		P:    "hello",
+		Body: struct{ I int }{999},
+	},
+	expectResp: &chM2Resp{"hello", 999},
+}, {
+	about: "doer with context and body but no body",
+	client: httprequest.Client{
+		Doer: doerWithContextFunc(func(ctx context.Context, req *http.Request) (*http.Response, error) {
+			if ctx == nil {
+				panic("Do called when DoWithContext expected")
+			}
+			return ctxhttp.Do(ctx, http.DefaultClient, req)
+		}),
+	},
+	req: &chM1Req{
+		P: "hello",
+	},
+	expectResp: &chM1Resp{"hello"},
+}, {
+	about: "context with request UUID",
+	client: httprequest.Client{
+		Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
+			if uuid := req.Header.Get(httprequest.RequestUUIDHeader); uuid != "test uuid" {
+				panic(fmt.Sprintf(`RequestUUID had unexpected value %q, expecting "test uuid"`, uuid))
+			}
+			return http.DefaultClient.Do(req)
+		}),
+	},
+	req: &chM1Req{
+		P: "hello",
+	},
+	requestUUID: "test uuid",
+	expectResp:  &chM1Resp{"hello"},
 }}
 
 func (s *clientSuite) TestCall(c *gc.C) {
@@ -121,7 +184,9 @@ func (s *clientSuite) TestCall(c *gc.C) {
 		}
 		client := test.client
 		client.BaseURL = srv.URL
-		err := client.Call(test.req, resp)
+		ctx := context.Background()
+		ctx = httprequest.ContextWithRequestUUID(ctx, test.requestUUID)
+		err := client.Call(ctx, test.req, resp)
 		if test.expectError != "" {
 			c.Check(err, gc.ErrorMatches, test.expectError)
 			if test.assertError != nil {
@@ -148,24 +213,33 @@ func (s *clientSuite) TestCallURLNoRequestPath(c *gc.C) {
 		},
 	}
 	var resp chM1Resp
-	err := client.CallURL(srv.URL+"/m1/:P", &req, &resp)
+	err := client.CallURL(context.Background(), srv.URL+"/m1/:P", &req, &resp)
 	c.Assert(err, gc.IsNil)
 	c.Assert(resp, jc.DeepEquals, chM1Resp{"hello"})
 }
 
 func mustNewRequest(url string, method string, body io.Reader) *http.Request {
+	return mustNewRequestWithHeader(url, method, body, http.Header{
+		"Content-Type": []string{"application/json"},
+	})
+}
+
+func mustNewRequestWithHeader(url string, method string, body io.Reader, hdr http.Header) *http.Request {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		panic(err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	for k, v := range hdr {
+		req.Header[k] = append(req.Header[k], v...)
+	}
 	return req
 }
 
 var doTests = []struct {
-	about   string
-	client  httprequest.Client
-	request *http.Request
+	about       string
+	client      httprequest.Client
+	request     *http.Request
+	requestUUID string
 
 	expectError string
 	expectCause interface{}
@@ -184,12 +258,52 @@ var doTests = []struct {
 }, {
 	about: "Do returns error",
 	client: httprequest.Client{
-		Doer: doerOnlyFunc(func(req *http.Request) (*http.Response, error) {
+		Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
 			return nil, errgo.Newf("an error")
 		}),
 	},
 	request:     mustNewRequest("/m2/foo", "POST", strings.NewReader(`{"I": 999}`)),
 	expectError: "POST http://.*/m2/foo: an error",
+}, {
+	about: "doer with context",
+	client: httprequest.Client{
+		Doer: doerWithContextFunc(func(ctx context.Context, req *http.Request) (*http.Response, error) {
+			if ctx == nil {
+				panic("Do called when DoWithContext expected")
+			}
+			return ctxhttp.Do(ctx, http.DefaultClient, req)
+		}),
+	},
+	request:    mustNewRequest("/m2/foo", "POST", strings.NewReader(`{"I": 999}`)),
+	expectResp: &chM2Resp{"foo", 999},
+}, {
+	about: "context with request UUID",
+	client: httprequest.Client{
+		Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
+			if uuid := req.Header.Get(httprequest.RequestUUIDHeader); uuid != "test uuid" {
+				panic(fmt.Sprintf(`RequestUUID had unexpected value %q, expecting "test uuid"`, uuid))
+			}
+			return http.DefaultClient.Do(req)
+		}),
+	},
+	request:     mustNewRequest("/m1/hello", "GET", nil),
+	requestUUID: "test uuid",
+	expectResp:  &chM1Resp{"hello"},
+}, {
+	about: "context with request UUID but one already in request",
+	client: httprequest.Client{
+		Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
+			if uuid := req.Header.Get(httprequest.RequestUUIDHeader); uuid != "test uuid 1" {
+				panic(fmt.Sprintf(`RequestUUID had unexpected value %q, expecting "test uuid 1"`, uuid))
+			}
+			return http.DefaultClient.Do(req)
+		}),
+	},
+	request: mustNewRequestWithHeader("/m1/hello", "GET", nil, http.Header{
+		httprequest.RequestUUIDHeader: []string{"test uuid 1"},
+	}),
+	requestUUID: "test uuid 2",
+	expectResp:  &chM1Resp{"hello"},
 }}
 
 func newInt64(i int64) *int64 {
@@ -209,7 +323,9 @@ func (s *clientSuite) TestDo(c *gc.C) {
 		if client.BaseURL == "" {
 			client.BaseURL = srv.URL
 		}
-		err := client.Do(test.request, resp)
+		ctx := context.Background()
+		ctx = httprequest.ContextWithRequestUUID(ctx, test.requestUUID)
+		err := client.Do(ctx, test.request, resp)
 		if test.expectError != "" {
 			c.Assert(err, gc.ErrorMatches, test.expectError)
 			if test.expectCause != nil {
@@ -229,7 +345,7 @@ func (s *clientSuite) TestDoWithHTTPReponse(c *gc.C) {
 		BaseURL: srv.URL,
 	}
 	var resp *http.Response
-	err := client.Get("/m1/foo", &resp)
+	err := client.Get(context.Background(), "/m1/foo", &resp)
 	c.Assert(err, gc.IsNil)
 	defer resp.Body.Close()
 	data, err := ioutil.ReadAll(resp.Body)
@@ -246,7 +362,7 @@ func (s *clientSuite) TestDoWithHTTPReponseAndError(c *gc.C) {
 		Doer:    &doer,
 	}
 	var resp *http.Response
-	err := client.Get("/m3", &resp)
+	err := client.Get(context.Background(), "/m3", &resp)
 	c.Assert(resp, gc.IsNil)
 	c.Assert(err, gc.ErrorMatches, `m3 error`)
 	c.Assert(doer.openedBodies, gc.Equals, 1)
@@ -260,7 +376,7 @@ func (s *clientSuite) TestCallWithHTTPResponse(c *gc.C) {
 		BaseURL: srv.URL,
 	}
 	var resp *http.Response
-	err := client.Call(&chM1Req{
+	err := client.Call(context.Background(), &chM1Req{
 		P: "foo",
 	}, &resp)
 	defer resp.Body.Close()
@@ -278,7 +394,7 @@ func (s *clientSuite) TestCallClosesResponseBodyOnSuccess(c *gc.C) {
 		Doer:    &doer,
 	}
 	var resp chM1Resp
-	err := client.Call(&chM1Req{
+	err := client.Call(context.Background(), &chM1Req{
 		P: "foo",
 	}, &resp)
 	c.Assert(err, gc.IsNil)
@@ -295,7 +411,7 @@ func (s *clientSuite) TestCallClosesResponseBodyOnError(c *gc.C) {
 		BaseURL: srv.URL,
 		Doer:    &doer,
 	}
-	err := client.Call(&chM3Req{}, nil)
+	err := client.Call(context.Background(), &chM3Req{}, nil)
 	c.Assert(err, gc.ErrorMatches, ".*m3 error")
 	c.Assert(doer.openedBodies, gc.Equals, 1)
 	c.Assert(doer.closedBodies, gc.Equals, 1)
@@ -312,7 +428,7 @@ func (s *clientSuite) TestDoClosesResponseBodyOnSuccess(c *gc.C) {
 	req, err := http.NewRequest("GET", "/m1/foo", nil)
 	c.Assert(err, gc.IsNil)
 	var resp chM1Resp
-	err = client.Do(req, &resp)
+	err = client.Do(context.Background(), req, &resp)
 	c.Assert(err, gc.IsNil)
 	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
 	c.Assert(doer.openedBodies, gc.Equals, 1)
@@ -329,7 +445,7 @@ func (s *clientSuite) TestDoClosesResponseBodyOnError(c *gc.C) {
 	}
 	req, err := http.NewRequest("GET", "/m3", nil)
 	c.Assert(err, gc.IsNil)
-	err = client.Do(req, nil)
+	err = client.Do(context.Background(), req, nil)
 	c.Assert(err, gc.ErrorMatches, ".*m3 error")
 	c.Assert(doer.openedBodies, gc.Equals, 1)
 	c.Assert(doer.closedBodies, gc.Equals, 1)
@@ -342,7 +458,7 @@ func (s *clientSuite) TestGet(c *gc.C) {
 		BaseURL: srv.URL,
 	}
 	var resp chM1Resp
-	err := client.Get("/m1/foo", &resp)
+	err := client.Get(context.Background(), "/m1/foo", &resp)
 	c.Assert(err, gc.IsNil)
 	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
 }
@@ -352,7 +468,7 @@ func (s *clientSuite) TestGetNoBaseURL(c *gc.C) {
 	defer srv.Close()
 	client := httprequest.Client{}
 	var resp chM1Resp
-	err := client.Get(srv.URL+"/m1/foo", &resp)
+	err := client.Get(context.Background(), srv.URL+"/m1/foo", &resp)
 	c.Assert(err, gc.IsNil)
 	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
 }
@@ -619,26 +735,23 @@ func (clientHandlers) ContentLength(rp httprequest.Params, p *chContentLengthReq
 	return rp.Request.ContentLength, nil
 }
 
-type doerFunc func(req *http.Request, body io.ReadSeeker) (*http.Response, error)
+type doerFunc func(req *http.Request) (*http.Response, error)
 
 func (f doerFunc) Do(req *http.Request) (*http.Response, error) {
-	return f(req, nil)
-}
-
-func (f doerFunc) DoWithBody(req *http.Request, body io.ReadSeeker) (*http.Response, error) {
-	if req.Body != nil {
-		panic("unexpected non-nil body in request")
-	}
-	if body == nil {
-		panic("unexpected nil body argument")
-	}
-	return f(req, body)
-}
-
-type doerOnlyFunc func(req *http.Request) (*http.Response, error)
-
-func (f doerOnlyFunc) Do(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type doerWithContextFunc func(ctx context.Context, req *http.Request) (*http.Response, error)
+
+func (f doerWithContextFunc) Do(req *http.Request) (*http.Response, error) {
+	return f(nil, req)
+}
+
+func (f doerWithContextFunc) DoWithContext(ctx context.Context, req *http.Request) (*http.Response, error) {
+	if ctx == nil {
+		panic("unexpected nil context")
+	}
+	return f(ctx, req)
 }
 
 type closeCountingDoer struct {

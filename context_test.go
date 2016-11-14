@@ -19,7 +19,7 @@ type contextSuite struct{}
 var _ = gc.Suite(&contextSuite{})
 
 func (s *contextSuite) TestRequestUUIDNotInContext(c *gc.C) {
-	c.Assert(httprequest.RequestUUID(context.Background()), gc.Equals, "")
+	c.Assert(httprequest.RequestUUIDFromContext(context.Background()), gc.Equals, "")
 }
 
 type testRequest struct {
@@ -28,7 +28,7 @@ type testRequest struct {
 
 func (s *contextSuite) TestRequestUUIDFromHeader(c *gc.C) {
 	hnd := errorMapper.Handle(func(p httprequest.Params, req *testRequest) {
-		uuid := httprequest.RequestUUID(p.Context)
+		uuid := httprequest.RequestUUIDFromContext(p.Context)
 		c.Assert(uuid, gc.Equals, "test-uuid")
 	})
 	req, err := http.NewRequest("GET", "/foo", nil)
@@ -40,7 +40,7 @@ func (s *contextSuite) TestRequestUUIDFromHeader(c *gc.C) {
 
 func (s *contextSuite) TestRequestUUIDGenerated(c *gc.C) {
 	hnd := errorMapper.Handle(func(p httprequest.Params, req *testRequest) {
-		uuid := httprequest.RequestUUID(p.Context)
+		uuid := httprequest.RequestUUIDFromContext(p.Context)
 		c.Assert(uuid, gc.Not(gc.Equals), "")
 	})
 	req, err := http.NewRequest("GET", "/foo", nil)

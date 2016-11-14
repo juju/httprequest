@@ -918,7 +918,7 @@ func (s *handlerSuite) TestHandleErrors(c *gc.C) {
 		c.Assert(p.PathPattern, gc.Equals, "")
 		ctx := p.Context
 		c.Assert(ctx, gc.Not(gc.IsNil))
-		uuid := httprequest.RequestUUID(ctx)
+		uuid := httprequest.RequestUUIDFromContext(ctx)
 		c.Assert(uuid, gc.Not(gc.Equals), "")
 		return errUnauth
 	})
@@ -938,7 +938,7 @@ func (s *handlerSuite) TestHandleErrors(c *gc.C) {
 		c.Assert(p.PathPattern, gc.Equals, "")
 		ctx := p.Context
 		c.Assert(ctx, gc.Not(gc.IsNil))
-		uuid := httprequest.RequestUUID(ctx)
+		uuid := httprequest.RequestUUIDFromContext(ctx)
 		c.Assert(uuid, gc.Not(gc.Equals), "")
 		p.Response.WriteHeader(http.StatusCreated)
 		p.Response.Write([]byte("something"))
