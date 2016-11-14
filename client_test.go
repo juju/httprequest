@@ -1,7 +1,6 @@
 package httprequest_test
 
 import (
-	"bytes"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -79,36 +78,6 @@ var callTests = []struct {
 	about:       "unexpected redirect",
 	req:         &chM2RedirectM2Req{},
 	expectError: `POST http://.*/m2/foo//: unexpected redirect \(status 307 Temporary Redirect\) from "http://.*/m2/foo//" to "http://.*/m2/foo"`,
-}, {
-	about: "doer with body",
-	client: httprequest.Client{
-		Doer: doerFunc(func(req *http.Request, body io.ReadSeeker) (*http.Response, error) {
-			if body == nil {
-				panic("Do called when DoWithBody expected")
-			}
-			req.Body = ioutil.NopCloser(body)
-			return http.DefaultClient.Do(req)
-		}),
-	},
-	req: &chM2Req{
-		P:    "hello",
-		Body: struct{ I int }{999},
-	},
-	expectResp: &chM2Resp{"hello", 999},
-}, {
-	about: "doer that implements DoWithBody but no body",
-	client: httprequest.Client{
-		Doer: doerFunc(func(req *http.Request, body io.ReadSeeker) (*http.Response, error) {
-			if body == nil {
-				panic("Do called but DoWithBody should always be called")
-			}
-			return http.DefaultClient.Do(req)
-		}),
-	},
-	req: &chM1Req{
-		P: "hello",
-	},
-	expectResp: &chM1Resp{"hello"},
 }, {
 	about:       "bad content in successful response",
 	req:         &chM4Req{},
@@ -197,7 +166,6 @@ var doTests = []struct {
 	about   string
 	client  httprequest.Client
 	request *http.Request
-	body    io.ReadSeeker
 
 	expectError string
 	expectCause interface{}
@@ -214,70 +182,13 @@ var doTests = []struct {
 	},
 	expectError: `cannot parse ":::": parse :::: missing protocol scheme`,
 }, {
-	about:       "body supplied in request",
-	request:     mustNewRequest("/m1/hello", "GET", strings.NewReader("")),
-	expectError: `GET http://.*/m1/hello: request body supplied unexpectedly`,
-}, {
-	about:      "content length is inferred from strings.Reader",
-	request:    mustNewRequest("/content-length", "PUT", nil),
-	body:       strings.NewReader("hello"),
-	expectResp: newInt64(int64(len("hello"))),
-}, {
-	about:      "content length is inferred from bytes.Reader",
-	request:    mustNewRequest("/content-length", "PUT", nil),
-	body:       bytes.NewReader([]byte("hello")),
-	expectResp: newInt64(int64(len("hello"))),
-}, {
-	about: "DoWithBody implemented but no body",
-	client: httprequest.Client{
-		Doer: doerFunc(func(req *http.Request, body io.ReadSeeker) (*http.Response, error) {
-			if body != nil {
-				panic("DoWithBody called when Do expected")
-			}
-			return http.DefaultClient.Do(req)
-		}),
-	},
-	request:    mustNewRequest("/m1/hello", "GET", nil),
-	expectResp: &chM1Resp{"hello"},
-}, {
-	about: "DoWithBody not implemented and body present",
-	client: httprequest.Client{
-		Doer: doerOnlyFunc(func(req *http.Request) (*http.Response, error) {
-			return http.DefaultClient.Do(req)
-		}),
-	},
-	request: mustNewRequest("/m2/foo", "POST", nil),
-	body:    strings.NewReader(`{"I": 999}`),
-	expectResp: &chM2Resp{
-		P:   "foo",
-		Arg: 999,
-	},
-}, {
-	about: "DoWithBody implemented and body present",
-	client: httprequest.Client{
-		Doer: doerFunc(func(req *http.Request, body io.ReadSeeker) (*http.Response, error) {
-			if body == nil {
-				panic("Do called when DoWithBody expected")
-			}
-			req.Body = ioutil.NopCloser(body)
-			return http.DefaultClient.Do(req)
-		}),
-	},
-	request: mustNewRequest("/m2/foo", "POST", nil),
-	body:    strings.NewReader(`{"I": 999}`),
-	expectResp: &chM2Resp{
-		P:   "foo",
-		Arg: 999,
-	},
-}, {
 	about: "Do returns error",
 	client: httprequest.Client{
 		Doer: doerOnlyFunc(func(req *http.Request) (*http.Response, error) {
 			return nil, errgo.Newf("an error")
 		}),
 	},
-	request:     mustNewRequest("/m2/foo", "POST", nil),
-	body:        strings.NewReader(`{"I": 999}`),
+	request:     mustNewRequest("/m2/foo", "POST", strings.NewReader(`{"I": 999}`)),
 	expectError: "POST http://.*/m2/foo: an error",
 }}
 
@@ -298,7 +209,7 @@ func (s *clientSuite) TestDo(c *gc.C) {
 		if client.BaseURL == "" {
 			client.BaseURL = srv.URL
 		}
-		err := client.Do(test.request, test.body, resp)
+		err := client.Do(test.request, resp)
 		if test.expectError != "" {
 			c.Assert(err, gc.ErrorMatches, test.expectError)
 			if test.expectCause != nil {
@@ -401,7 +312,7 @@ func (s *clientSuite) TestDoClosesResponseBodyOnSuccess(c *gc.C) {
 	req, err := http.NewRequest("GET", "/m1/foo", nil)
 	c.Assert(err, gc.IsNil)
 	var resp chM1Resp
-	err = client.Do(req, nil, &resp)
+	err = client.Do(req, &resp)
 	c.Assert(err, gc.IsNil)
 	c.Assert(resp, jc.DeepEquals, chM1Resp{"foo"})
 	c.Assert(doer.openedBodies, gc.Equals, 1)
@@ -418,29 +329,10 @@ func (s *clientSuite) TestDoClosesResponseBodyOnError(c *gc.C) {
 	}
 	req, err := http.NewRequest("GET", "/m3", nil)
 	c.Assert(err, gc.IsNil)
-	err = client.Do(req, nil, nil)
+	err = client.Do(req, nil)
 	c.Assert(err, gc.ErrorMatches, ".*m3 error")
 	c.Assert(doer.openedBodies, gc.Equals, 1)
 	c.Assert(doer.closedBodies, gc.Equals, 1)
-}
-
-func (s *clientSuite) TestDoDoesNotReadRequestBodyAfterReturning(c *gc.C) {
-	body := &largeReader{byte: 'a', total: 300 * 1024}
-	// Closing the body will cause a panic under the race
-	// detector if the Do method reads after returning.
-	defer body.Close()
-
-	srv := s.newServer()
-	defer srv.Close()
-
-	req, err := http.NewRequest("GET", "/not-an-endpoint", nil)
-	c.Assert(err, gc.IsNil)
-
-	client := &httprequest.Client{
-		BaseURL: srv.URL,
-	}
-	err = client.Do(req, body, nil)
-	c.Assert(err, gc.ErrorMatches, `GET .*/not-an-endpoint: cannot unmarshal error response \(status 404 Not Found\): unexpected content type text/plain; want application/json; content: 404 page not found`)
 }
 
 func (s *clientSuite) TestGet(c *gc.C) {
