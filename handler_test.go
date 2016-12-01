@@ -858,10 +858,6 @@ func (*handlerSuite) TestSetHeader(c *gc.C) {
 	c.Assert(rec.Header().Get("some-custom-header"), gc.Equals, "yes")
 }
 
-func (*handlerSuite) TestSetHeaderOnErrorMapper(c *gc.C) {
-	// TODO write this test!
-}
-
 var testServer = httprequest.Server{
 	ErrorMapper: testErrorMapper,
 }

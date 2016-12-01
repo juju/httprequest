@@ -61,10 +61,10 @@ var callTests = []struct {
 		P:    "hello",
 		Body: struct{ I bool }{true},
 	},
-	expectError: `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal .*`,
+	expectError: `Post http:.*: cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal .*`,
 	assertError: func(c *gc.C, err error) {
 		c.Assert(errgo.Cause(err), gc.FitsTypeOf, (*httprequest.RemoteError)(nil))
-		err1 := err.(*httprequest.RemoteError)
+		err1 := errgo.Cause(err).(*httprequest.RemoteError)
 		c.Assert(err1.Code, gc.Equals, "bad request")
 		c.Assert(err1.Message, gc.Matches, `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal .*`)
 	},
@@ -76,16 +76,16 @@ var callTests = []struct {
 		},
 	},
 	req:         &chM3Req{},
-	expectError: `GET http://.*/m3: unexpected HTTP response status: 500 Internal Server Error`,
+	expectError: `Get http://.*/m3: unexpected HTTP response status: 500 Internal Server Error`,
 }, {
 	about:       "unexpected redirect",
 	req:         &chM2RedirectM2Req{},
-	expectError: `POST http://.*/m2/foo//: unexpected redirect \(status 307 Temporary Redirect\) from "http://.*/m2/foo//" to "http://.*/m2/foo"`,
+	expectError: `Post http://.*/m2/foo//: unexpected redirect \(status 307 Temporary Redirect\) from "http://.*/m2/foo//" to "http://.*/m2/foo"`,
 }, {
 	about:       "bad content in successful response",
 	req:         &chM4Req{},
 	expectResp:  new(int),
-	expectError: `GET http://.*/m4: unexpected content type text/plain; want application/json; content: bad response`,
+	expectError: `Get http://.*/m4: unexpected content type text/plain; want application/json; content: bad response`,
 	assertError: func(c *gc.C, err error) {
 		c.Assert(errgo.Cause(err), gc.FitsTypeOf, (*httprequest.DecodeResponseError)(nil))
 
@@ -99,7 +99,7 @@ var callTests = []struct {
 	about:       "bad content in error response",
 	req:         &chM5Req{},
 	expectResp:  new(int),
-	expectError: `GET http://.*/m5: cannot unmarshal error response \(status 418 I'm a teapot\): unexpected content type text/plain; want application/json; content: bad error value`,
+	expectError: `Get http://.*/m5: cannot unmarshal error response \(status 418 I'm a teapot\): unexpected content type text/plain; want application/json; content: bad error value`,
 	assertError: func(c *gc.C, err error) {
 		c.Assert(errgo.Cause(err), gc.FitsTypeOf, (*httprequest.DecodeResponseError)(nil))
 
@@ -171,6 +171,7 @@ func (s *clientSuite) TestCall(c *gc.C) {
 		ctx := context.Background()
 		err := client.Call(ctx, test.req, resp)
 		if test.expectError != "" {
+			c.Logf("err %v", errgo.Details(err))
 			c.Check(err, gc.ErrorMatches, test.expectError)
 			if test.assertError != nil {
 				test.assertError(c, err)
@@ -246,7 +247,7 @@ var doTests = []struct {
 		}),
 	},
 	request:     mustNewRequest("/m2/foo", "POST", strings.NewReader(`{"I": 999}`)),
-	expectError: "POST http://.*/m2/foo: an error",
+	expectError: "Post http://.*/m2/foo: an error",
 }, {
 	about: "doer with context",
 	client: httprequest.Client{
@@ -318,7 +319,7 @@ func (s *clientSuite) TestDoWithHTTPReponseAndError(c *gc.C) {
 	var resp *http.Response
 	err := client.Get(context.Background(), "/m3", &resp)
 	c.Assert(resp, gc.IsNil)
-	c.Assert(err, gc.ErrorMatches, `m3 error`)
+	c.Assert(err, gc.ErrorMatches, `Get http:.*/m3: m3 error`)
 	c.Assert(doer.openedBodies, gc.Equals, 1)
 	c.Assert(doer.closedBodies, gc.Equals, 1)
 }
