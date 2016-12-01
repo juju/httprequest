@@ -41,12 +41,11 @@ type Params struct {
 	PathVar  httprouter.Params
 	// PathPattern holds the path pattern matched by httprouter.
 	// It is only set where httprequest has the information;
-	// that is where the call was made by ErrorMapper.Handler
-	// or ErrorMapper.Handlers.
+	// that is where the call was made by Server.Handler
+	// or Server.Handlers.
 	PathPattern string
-	// Context holds a context for the request. On go version 1.7 and
-	// above this will be the same as the value returned by
-	// Request.Context().
+	// Context holds a context for the request. In Go 1.7 and later,
+	// this should be used in preference to Request.Context.
 	Context context.Context
 }
 

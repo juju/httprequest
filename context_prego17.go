@@ -11,10 +11,9 @@ import (
 	"golang.org/x/net/context"
 )
 
-func contextFromRequest(req *http.Request) (context.Context, *http.Request, context.CancelFunc) {
+func contextFromRequest(req *http.Request) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx = ContextWithRequestUUID(ctx, uuidFromRequest(req))
-	return ctx, req, cancel
+	return ctx, cancel
 }
 
 func requestWithContext(req *http.Request, _ context.Context) *http.Request {

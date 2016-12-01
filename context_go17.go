@@ -10,14 +10,8 @@ import (
 	"net/http"
 )
 
-func contextFromRequest(req *http.Request) (context.Context, *http.Request, context.CancelFunc) {
-	ctx := req.Context()
-	ctx = ContextWithRequestUUID(ctx, uuidFromRequest(req))
-	req = req.WithContext(ctx)
-	// Note there is no need to make httprequest cancel the context
-	// as the standard HTTP server will cancel it when the ServeHTTP
-	// method completes.
-	return ctx, req, func() {}
+func contextFromRequest(req *http.Request) (context.Context, context.CancelFunc) {
+	return req.Context(), func() {}
 }
 
 func requestWithContext(req *http.Request, ctx context.Context) *http.Request {

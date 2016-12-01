@@ -11,21 +11,28 @@ import (
 	"reflect"
 
 	"github.com/julienschmidt/httprouter"
+	"golang.org/x/net/context"
 	"gopkg.in/errgo.v1"
 )
 
-// ErrorMapper holds a function that can convert a Go error
-// into a form that can be returned as a JSON body from an HTTP request.
-//
-// The httpStatus value reports the desired HTTP status.
-//
-// If the returned errorBody implements HeaderSetter, then
-// that method will be called to add custom headers to the request.
-type ErrorMapper func(err error) (httpStatus int, errorBody interface{})
+// Server represents the server side of an HTTP servers, and can be
+// used to create HTTP handlers although it is not an HTTP handler
+// itself.
+type Server struct {
+	// ErrorMapper holds a function that can convert a Go error
+	// into a form that can be returned as a JSON body from an HTTP request.
+	//
+	// The httpStatus value reports the desired HTTP status.
+	//
+	// If the returned errorBody implements HeaderSetter, then
+	// that method will be called to add custom headers to the request.
+	ErrorMapper func(ctxt context.Context, err error) (httpStatus int, errorBody interface{})
+}
 
 var (
 	paramsType             = reflect.TypeOf(Params{})
 	errorType              = reflect.TypeOf((*error)(nil)).Elem()
+	contextType            = reflect.TypeOf((*context.Context)(nil)).Elem()
 	httpResponseWriterType = reflect.TypeOf((*http.ResponseWriter)(nil)).Elem()
 	httpHeaderType         = reflect.TypeOf(http.Header(nil))
 	httpRequestType        = reflect.TypeOf((*http.Request)(nil))
@@ -51,28 +58,27 @@ var (
 // not be called and the unmarshal error will be written as a JSON
 // response.
 //
-// As an additional special case to the rules defined in Unmarshal,
-// the tag on an anonymous field of type Route
-// specifies the method and path to use in the HTTP request.
-// It should hold two space-separated fields; the first specifies
-// the HTTP method, the second the URL path to use for the request.
-// If this is given, the returned handler will hold that
-// method and path, otherwise they will be empty.
+// As an additional special case to the rules defined in Unmarshal, the
+// tag on an anonymous field of type Route specifies the method and path
+// to use in the HTTP request. It should hold two space-separated
+// fields; the first specifies the HTTP method, the second the URL path
+// to use for the request. If this is given, the returned handler will
+// hold that method and path, otherwise they will be empty.
 //
-// If an error is returned from f, it is passed through the error mapper before
-// writing as a JSON response.
+// If an error is returned from f, it is passed through the error mapper
+// before writing as a JSON response.
 //
 // In the third form, when no error is returned, the result is written
-// as a JSON response with status http.StatusOK. Also in this case,
-// any calls to Params.Response.Write or Params.Response.WriteHeader
-// will be ignored, as the response code and data should be defined
-// entirely by the returned result and error.
+// as a JSON response with status http.StatusOK. Also in this case, any
+// calls to Params.Response.Write or Params.Response.WriteHeader will be
+// ignored, as the response code and data should be defined entirely by
+// the returned result and error.
 //
-// Handle will panic if the provided function is not in one
-// of the above forms.
-func (e ErrorMapper) Handle(f interface{}) Handler {
+// Handle will panic if the provided function is not in one of the above
+// forms.
+func (srv *Server) Handle(f interface{}) Handler {
 	fv := reflect.ValueOf(f)
-	hf, rt, err := e.handlerFunc(fv.Type())
+	hf, rt, err := srv.handlerFunc(fv.Type())
 	if err != nil {
 		panic(errgo.Notef(err, "bad handler function"))
 	}
@@ -80,7 +86,7 @@ func (e ErrorMapper) Handle(f interface{}) Handler {
 		Method: rt.method,
 		Path:   rt.path,
 		Handle: func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
-			ctx, req, cancel := contextFromRequest(req)
+			ctx, cancel := contextFromRequest(req)
 			defer cancel()
 			hf(fv, Params{
 				Response:    w,
@@ -96,10 +102,15 @@ func (e ErrorMapper) Handle(f interface{}) Handler {
 // Handlers returns a list of handlers that will be handled by the value
 // returned by the given argument, which must be a function of the form:
 //
-// 	func(httprequest.Params) (T, error)
+// 	func(httprequest.Params) (T, context.Context, error)
 //
 // for some type T. Each exported method defined on T defines a handler,
 // and should be in one of the forms accepted by ErrorMapper.Handle.
+// The returned context will be used as the value of Params.Context
+// when Params is passed to any method. It will also be used
+// when writing an error if the function returns an error.
+// Note that it is OK to use both the standard library context.Context
+// or golang.org/x/net/context.Context in the context return value.
 //
 // Handlers will panic if f is not of the required form, no methods are
 // defined on T or any method defined on T is not suitable for Handle.
@@ -109,7 +120,7 @@ func (e ErrorMapper) Handle(f interface{}) Handler {
 //
 // If T implements io.Closer, its Close method will be called
 // after the request is completed.
-func (e ErrorMapper) Handlers(f interface{}) []Handler {
+func (srv Server) Handlers(f interface{}) []Handler {
 	fv := reflect.ValueOf(f)
 	wt, err := checkHandlersWrapperFunc(fv)
 	if err != nil {
@@ -135,7 +146,7 @@ func (e ErrorMapper) Handlers(f interface{}) []Handler {
 		// we get the method from the actual value at dispatch time),
 		// so we hide it.
 		mt := withoutReceiver(m.Type)
-		hf, rt, err := e.handlerFunc(mt)
+		hf, rt, err := srv.handlerFunc(mt)
 		if err != nil {
 			panic(errgo.Notef(err, "bad type for method %s", m.Name))
 		}
@@ -143,9 +154,9 @@ func (e ErrorMapper) Handlers(f interface{}) []Handler {
 			panic(errgo.Notef(err, "method %s does not specify route method and path", m.Name))
 		}
 		handler := func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
-			ctx, req, cancel := contextFromRequest(req)
+			ctx, cancel := contextFromRequest(req)
 			defer cancel()
-			terrv := fv.Call([]reflect.Value{
+			outv := fv.Call([]reflect.Value{
 				reflect.ValueOf(Params{
 					Response:    w,
 					Request:     req,
@@ -154,9 +165,16 @@ func (e ErrorMapper) Handlers(f interface{}) []Handler {
 					Context:     ctx,
 				}),
 			})
-			tv, errv := terrv[0], terrv[1]
+			tv, ctxv, errv := outv[0], outv[1], outv[2]
+			// Get the context value robustly even if the
+			// handler stupidly decides to return nil and fall
+			// back to the original context if it does.
+			ctx1, _ := ctxv.Interface().(context.Context)
+			if ctx1 != nil {
+				ctx = ctx1
+			}
 			if !errv.IsNil() {
-				e.WriteError(w, errv.Interface().(error))
+				srv.WriteError(ctx, w, errv.Interface().(error))
 				return
 			}
 			if hasClose {
@@ -195,12 +213,17 @@ func checkHandlersWrapperFunc(fv reflect.Value) (reflect.Type, error) {
 	if n := ft.NumIn(); n != 1 {
 		return nil, errgo.Newf("got %d arguments, want 1", n)
 	}
-	if n := ft.NumOut(); n != 2 {
-		return nil, errgo.Newf("function returns %d values, want 2", n)
+	if n := ft.NumOut(); n != 3 {
+		return nil, errgo.Newf("function returns %d values, want (<T>, context.Context, error)", n)
 	}
-	if ft.In(0) != paramsType ||
-		ft.Out(1) != errorType {
-		return nil, errgo.Newf("invalid argument or return values, want func(httprequest.Params) (any, error), got %v", ft)
+	if t := ft.In(0); t != paramsType {
+		return nil, errgo.Newf("invalid argument, want httprequest.Params, got %v", t)
+	}
+	if t := ft.Out(1); !t.Implements(contextType) {
+		return nil, errgo.Newf("second return parameter of type %v does not implement context.Context", t)
+	}
+	if t := ft.Out(2); t != errorType {
+		return nil, errgo.Newf("invalid third return parameter, want error, got %v", t)
 	}
 	return ft.Out(0), nil
 }
@@ -249,12 +272,12 @@ func checkHandleType(t reflect.Type) (*requestType, error) {
 // handlerFunc returns a function that will call a function of the given type,
 // unmarshaling request parameters and marshaling the response as
 // appropriate.
-func (e ErrorMapper) handlerFunc(ft reflect.Type) (func(fv reflect.Value, p Params), *requestType, error) {
+func (srv *Server) handlerFunc(ft reflect.Type) (func(fv reflect.Value, p Params), *requestType, error) {
 	rt, err := checkHandleType(ft)
 	if err != nil {
 		return nil, nil, errgo.Mask(err)
 	}
-	return e.handleResult(ft, handleParams(ft, rt)), rt, nil
+	return srv.handleResult(ft, handleParams(ft, rt)), rt, nil
 }
 
 // handleParams handles unmarshaling the parameters to be passed to
@@ -304,7 +327,7 @@ func handleParams(
 // handleResult handles the marshaling of the result values from the call to a function
 // of type ft. The returned function accepts the actual function value to use in the
 // call as well as the request parameters.
-func (e ErrorMapper) handleResult(
+func (srv *Server) handleResult(
 	ft reflect.Type,
 	f func(fv reflect.Value, p Params) ([]reflect.Value, error),
 ) func(fv reflect.Value, p Params) {
@@ -314,7 +337,7 @@ func (e ErrorMapper) handleResult(
 		return func(fv reflect.Value, p Params) {
 			_, err := f(fv, p)
 			if err != nil {
-				e.WriteError(p.Response, err)
+				srv.WriteError(p.Context, p.Response, err)
 			}
 		}
 	case 1:
@@ -322,12 +345,12 @@ func (e ErrorMapper) handleResult(
 		return func(fv reflect.Value, p Params) {
 			out, err := f(fv, p)
 			if err != nil {
-				e.WriteError(p.Response, err)
+				srv.WriteError(p.Context, p.Response, err)
 				return
 			}
 			herr := out[0].Interface()
 			if herr != nil {
-				e.WriteError(p.Response, herr.(error))
+				srv.WriteError(p.Context, p.Response, herr.(error))
 			}
 		}
 	case 2:
@@ -335,17 +358,17 @@ func (e ErrorMapper) handleResult(
 		return func(fv reflect.Value, p Params) {
 			out, err := f(fv, p)
 			if err != nil {
-				e.WriteError(p.Response, err)
+				srv.WriteError(p.Context, p.Response, err)
 				return
 			}
 			herr := out[1].Interface()
 			if herr != nil {
-				e.WriteError(p.Response, herr.(error))
+				srv.WriteError(p.Context, p.Response, herr.(error))
 				return
 			}
 			err = WriteJSON(p.Response, http.StatusOK, out[0].Interface())
 			if err != nil {
-				e.WriteError(p.Response, err)
+				srv.WriteError(p.Context, p.Response, err)
 			}
 		}
 	default:
@@ -379,9 +402,9 @@ type ErrorHandler func(Params) error
 //
 // Note that the Params argument passed to handle will not
 // have its PathPattern set as that information is not available.
-func (e ErrorMapper) HandleJSON(handle JSONHandler) httprouter.Handle {
+func (srv *Server) HandleJSON(handle JSONHandler) httprouter.Handle {
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
-		ctx, req, cancel := contextFromRequest(req)
+		ctx, cancel := contextFromRequest(req)
 		defer cancel()
 		val, err := handle(Params{
 			Response: headerOnlyResponseWriter{w.Header()},
@@ -394,7 +417,7 @@ func (e ErrorMapper) HandleJSON(handle JSONHandler) httprouter.Handle {
 				return
 			}
 		}
-		e.WriteError(w, err)
+		srv.WriteError(ctx, w, err)
 	}
 }
 
@@ -403,12 +426,12 @@ func (e ErrorMapper) HandleJSON(handle JSONHandler) httprouter.Handle {
 //
 // Note that the Params argument passed to handle will not
 // have its PathPattern set as that information is not available.
-func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
+func (srv *Server) HandleErrors(handle ErrorHandler) httprouter.Handle {
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 		w1 := responseWriter{
 			ResponseWriter: w,
 		}
-		ctx, req, cancel := contextFromRequest(req)
+		ctx, cancel := contextFromRequest(req)
 		defer cancel()
 		if err := handle(Params{
 			Response: &w1,
@@ -426,7 +449,7 @@ func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
 				// TODO log an error in this case.
 				return
 			}
-			e.WriteError(w, err)
+			srv.WriteError(ctx, w, err)
 		}
 	}
 }
@@ -438,8 +461,8 @@ func (e ErrorMapper) HandleErrors(handle ErrorHandler) httprouter.Handle {
 // the ErrorMapper so it is possible to add custom
 // headers to the HTTP error response by implementing
 // HeaderSetter.
-func (e ErrorMapper) WriteError(w http.ResponseWriter, err error) {
-	status, resp := e(err)
+func (srv *Server) WriteError(ctx context.Context, w http.ResponseWriter, err error) {
+	status, resp := srv.ErrorMapper(ctx, err)
 	err1 := WriteJSON(w, status, resp)
 	if err1 == nil {
 		return
@@ -448,7 +471,7 @@ func (e ErrorMapper) WriteError(w http.ResponseWriter, err error) {
 
 	// JSON-marshaling the original error failed, so try to send that
 	// error instead; if that fails, give up and go home.
-	status1, resp1 := e(errgo.Notef(err1, "cannot marshal error response %q", err))
+	status1, resp1 := srv.ErrorMapper(ctx, errgo.Notef(err1, "cannot marshal error response %q", err))
 	err2 := WriteJSON(w, status1, resp1)
 	if err2 == nil {
 		return

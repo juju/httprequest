@@ -123,7 +123,7 @@ func BenchmarkUnmarshal2Fields(b *testing.B) {
 
 func BenchmarkHandle2FieldsTrad(b *testing.B) {
 	results := []testResult{}
-	benchmarkHandle2Fields(b, errorMapper.HandleJSON(func(p httprequest.Params) (interface{}, error) {
+	benchmarkHandle2Fields(b, testServer.HandleJSON(func(p httprequest.Params) (interface{}, error) {
 		limit := -1
 		if limitStr := p.Request.Form.Get("limit"); limitStr != "" {
 			var err error
@@ -141,7 +141,7 @@ func BenchmarkHandle2FieldsTrad(b *testing.B) {
 
 func BenchmarkHandle2Fields(b *testing.B) {
 	results := []testResult{}
-	benchmarkHandle2Fields(b, errorMapper.Handle(func(p httprequest.Params, arg *testParams2Fields) ([]testResult, error) {
+	benchmarkHandle2Fields(b, testServer.Handle(func(p httprequest.Params, arg *testParams2Fields) ([]testResult, error) {
 		if arg.Limit <= 0 {
 			panic("unreachable")
 		}
@@ -151,7 +151,7 @@ func BenchmarkHandle2Fields(b *testing.B) {
 
 func BenchmarkHandle2FieldsUnmarshalOnly(b *testing.B) {
 	results := []testResult{}
-	benchmarkHandle2Fields(b, errorMapper.HandleJSON(func(p httprequest.Params) (interface{}, error) {
+	benchmarkHandle2Fields(b, testServer.HandleJSON(func(p httprequest.Params) (interface{}, error) {
 		var arg testParams2Fields
 		if err := httprequest.Unmarshal(p, &arg); err != nil {
 			return nil, err
@@ -226,7 +226,7 @@ func BenchmarkUnmarshal4Fields(b *testing.B) {
 
 func BenchmarkHandle4FieldsTrad(b *testing.B) {
 	results := []testResult{}
-	benchmarkHandle4Fields(b, errorMapper.HandleJSON(func(p httprequest.Params) (interface{}, error) {
+	benchmarkHandle4Fields(b, testServer.HandleJSON(func(p httprequest.Params) (interface{}, error) {
 		start, stop, err := parseDateRange(p.Request.Form)
 		if err != nil {
 			panic("unreachable")
@@ -271,7 +271,7 @@ func parseDateRange(form url.Values) (start, stop time.Time, err error) {
 
 func BenchmarkHandle4Fields(b *testing.B) {
 	results := []testResult{}
-	benchmarkHandle4Fields(b, errorMapper.Handle(func(p httprequest.Params, arg *testParams4Fields) ([]testResult, error) {
+	benchmarkHandle4Fields(b, testServer.Handle(func(p httprequest.Params, arg *testParams4Fields) ([]testResult, error) {
 		if arg.To.Before(arg.From.Time) {
 			panic("unreachable")
 		}
@@ -284,7 +284,7 @@ func BenchmarkHandle4Fields(b *testing.B) {
 
 func BenchmarkHandle4FieldsUnmarshalOnly(b *testing.B) {
 	results := []testResult{}
-	benchmarkHandle4Fields(b, errorMapper.HandleJSON(func(p httprequest.Params) (interface{}, error) {
+	benchmarkHandle4Fields(b, testServer.HandleJSON(func(p httprequest.Params) (interface{}, error) {
 		var arg testParams4Fields
 		if err := httprequest.Unmarshal(p, &arg); err != nil {
 			return nil, err
@@ -328,20 +328,20 @@ func benchmarkHandle4Fields(b *testing.B, handle func(w http.ResponseWriter, req
 }
 
 func BenchmarkHandle2StringFields(b *testing.B) {
-	benchmarkHandleNFields(b, 2, errorMapper.Handle(func(p httprequest.Params, arg *testParams2StringFields) error {
+	benchmarkHandleNFields(b, 2, testServer.Handle(func(p httprequest.Params, arg *testParams2StringFields) error {
 		return nil
 	}).Handle)
 }
 
 func BenchmarkHandle2StringFieldsUnmarshalOnly(b *testing.B) {
-	benchmarkHandleNFields(b, 2, errorMapper.HandleErrors(func(p httprequest.Params) error {
+	benchmarkHandleNFields(b, 2, testServer.HandleErrors(func(p httprequest.Params) error {
 		var arg testParams2StringFields
 		return httprequest.Unmarshal(p, &arg)
 	}))
 }
 
 func BenchmarkHandle2StringFieldsTrad(b *testing.B) {
-	benchmarkHandleNFields(b, 2, errorMapper.HandleErrors(func(p httprequest.Params) error {
+	benchmarkHandleNFields(b, 2, testServer.HandleErrors(func(p httprequest.Params) error {
 		var arg testParams2StringFields
 		arg.Field0 = p.Request.Form.Get("Field0")
 		arg.Field1 = p.Request.Form.Get("Field1")
@@ -350,20 +350,20 @@ func BenchmarkHandle2StringFieldsTrad(b *testing.B) {
 }
 
 func BenchmarkHandle4StringFields(b *testing.B) {
-	benchmarkHandleNFields(b, 4, errorMapper.Handle(func(p httprequest.Params, arg *testParams4StringFields) error {
+	benchmarkHandleNFields(b, 4, testServer.Handle(func(p httprequest.Params, arg *testParams4StringFields) error {
 		return nil
 	}).Handle)
 }
 
 func BenchmarkHandle4StringFieldsUnmarshalOnly(b *testing.B) {
-	benchmarkHandleNFields(b, 4, errorMapper.HandleErrors(func(p httprequest.Params) error {
+	benchmarkHandleNFields(b, 4, testServer.HandleErrors(func(p httprequest.Params) error {
 		var arg testParams4StringFields
 		return httprequest.Unmarshal(p, &arg)
 	}))
 }
 
 func BenchmarkHandle4StringFieldsTrad(b *testing.B) {
-	benchmarkHandleNFields(b, 4, errorMapper.HandleErrors(func(p httprequest.Params) error {
+	benchmarkHandleNFields(b, 4, testServer.HandleErrors(func(p httprequest.Params) error {
 		var arg testParams4StringFields
 		arg.Field0 = p.Request.Form.Get("Field0")
 		arg.Field1 = p.Request.Form.Get("Field1")
@@ -374,20 +374,20 @@ func BenchmarkHandle4StringFieldsTrad(b *testing.B) {
 }
 
 func BenchmarkHandle8StringFields(b *testing.B) {
-	benchmarkHandleNFields(b, 8, errorMapper.Handle(func(p httprequest.Params, arg *testParams8StringFields) error {
+	benchmarkHandleNFields(b, 8, testServer.Handle(func(p httprequest.Params, arg *testParams8StringFields) error {
 		return nil
 	}).Handle)
 }
 
 func BenchmarkHandle8StringFieldsUnmarshalOnly(b *testing.B) {
-	benchmarkHandleNFields(b, 8, errorMapper.HandleErrors(func(p httprequest.Params) error {
+	benchmarkHandleNFields(b, 8, testServer.HandleErrors(func(p httprequest.Params) error {
 		var arg testParams8StringFields
 		return httprequest.Unmarshal(p, &arg)
 	}))
 }
 
 func BenchmarkHandle8StringFieldsTrad(b *testing.B) {
-	benchmarkHandleNFields(b, 8, errorMapper.HandleErrors(func(p httprequest.Params) error {
+	benchmarkHandleNFields(b, 8, testServer.HandleErrors(func(p httprequest.Params) error {
 		var arg testParams8StringFields
 		arg.Field0 = p.Request.Form.Get("Field0")
 		arg.Field1 = p.Request.Form.Get("Field1")
@@ -402,20 +402,20 @@ func BenchmarkHandle8StringFieldsTrad(b *testing.B) {
 }
 
 func BenchmarkHandle16StringFields(b *testing.B) {
-	benchmarkHandleNFields(b, 16, errorMapper.Handle(func(p httprequest.Params, arg *testParams16StringFields) error {
+	benchmarkHandleNFields(b, 16, testServer.Handle(func(p httprequest.Params, arg *testParams16StringFields) error {
 		return nil
 	}).Handle)
 }
 
 func BenchmarkHandle16StringFieldsUnmarshalOnly(b *testing.B) {
-	benchmarkHandleNFields(b, 16, errorMapper.HandleErrors(func(p httprequest.Params) error {
+	benchmarkHandleNFields(b, 16, testServer.HandleErrors(func(p httprequest.Params) error {
 		var arg testParams16StringFields
 		return httprequest.Unmarshal(p, &arg)
 	}))
 }
 
 func BenchmarkHandle16StringFieldsTrad(b *testing.B) {
-	benchmarkHandleNFields(b, 16, errorMapper.HandleErrors(func(p httprequest.Params) error {
+	benchmarkHandleNFields(b, 16, testServer.HandleErrors(func(p httprequest.Params) error {
 		var arg testParams16StringFields
 		arg.Field0 = p.Request.Form.Get("Field0")
 		arg.Field1 = p.Request.Form.Get("Field1")

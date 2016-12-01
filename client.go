@@ -39,9 +39,8 @@ type Client struct {
 
 	// Doer holds a value that will be used to actually
 	// make the HTTP request. If it is nil, http.DefaultClient
-	// will be used instead. If the request has a non-empty body
-	// and Doer implements DoerWithBody, DoWithBody
-	// will be used instead.
+	// will be used instead. If Doer implements DoerWithContext,
+	// DoWithContext will be used instead.
 	Doer Doer
 
 	// If a request returns an HTTP response that signifies an
@@ -135,11 +134,6 @@ func (c *Client) Do(ctx context.Context, req *http.Request, resp interface{}) er
 		req.URL, err = appendURL(c.BaseURL, req.URL.String())
 		if err != nil {
 			return errgo.Mask(err)
-		}
-	}
-	if req.Header.Get(RequestUUIDHeader) == "" {
-		if uuid := RequestUUIDFromContext(ctx); uuid != "" {
-			req.Header.Set(RequestUUIDHeader, uuid)
 		}
 	}
 	doer := c.Doer
