@@ -148,7 +148,7 @@ func (c *Client) Do(ctx context.Context, req *http.Request, resp interface{}) er
 		httpResp, err = doer.Do(requestWithContext(req, ctx))
 	}
 	if err != nil {
-		return errgo.NoteMask(err, fmt.Sprintf("%s %s", req.Method, req.URL), errgo.Any)
+		return errgo.Mask(urlError(err, req), errgo.Any)
 	}
 	return c.unmarshalResponse(httpResp, resp)
 }
@@ -173,7 +173,7 @@ func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) er
 		}
 		defer httpResp.Body.Close()
 		if err := UnmarshalJSONResponse(httpResp, resp); err != nil {
-			return errgo.NoteMask(err, fmt.Sprintf("%s %s", httpResp.Request.Method, httpResp.Request.URL), isDecodeResponseError)
+			return errgo.Mask(urlError(err, httpResp.Request), isDecodeResponseError)
 		}
 		return nil
 	}
@@ -184,21 +184,9 @@ func (c *Client) unmarshalResponse(httpResp *http.Response, resp interface{}) er
 	}
 	err := errUnmarshaler(httpResp)
 	if err == nil {
-		err = errgo.Newf(
-			"%s %s: unexpected HTTP response status: %s",
-			httpResp.Request.Method,
-			httpResp.Request.URL.String(),
-			httpResp.Status,
-		)
+		err = errgo.Newf("unexpected HTTP response status: %s", httpResp.Status)
 	}
-	if isDecodeResponseError(err) || isDecodeResponseError(errgo.Cause(err)) {
-		return errgo.NoteMask(
-			err,
-			httpResp.Request.Method+" "+httpResp.Request.URL.String(),
-			errgo.Any,
-		)
-	}
-	return err
+	return errgo.Mask(urlError(err, httpResp.Request), errgo.Any)
 }
 
 // ErrorUnmarshaler returns a function which will unmarshal error
@@ -331,4 +319,16 @@ func appendURL(baseURLStr, relURLStr string) (*url.URL, error) {
 		}
 	}
 	return b, nil
+}
+
+func urlError(err error, req *http.Request) error {
+	_, ok := errgo.Cause(err).(*url.Error)
+	if ok {
+		// The error is already sufficiently annotated.
+		return err
+	}
+	// Convert the method to mostly lower case to match net/http's behaviour
+	// so we don't get silly divergence of messages.
+	method := req.Method[:1] + strings.ToLower(req.Method[1:])
+	return errgo.NoteMask(err, fmt.Sprintf("%s %s", method, req.URL), errgo.Any)
 }
