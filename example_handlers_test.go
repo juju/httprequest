@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/julienschmidt/httprouter"
+	"golang.org/x/net/context"
 
 	"github.com/juju/httprequest"
 )
@@ -29,13 +30,13 @@ func (arithHandler) Add(arg *struct {
 	}, nil
 }
 
-func ExampleErrorMapper_Handlers() {
-	f := func(p httprequest.Params) (arithHandler, error) {
+func ExampleServer_Handlers() {
+	f := func(p httprequest.Params) (arithHandler, context.Context, error) {
 		fmt.Printf("handle %s %s\n", p.Request.Method, p.Request.URL)
-		return arithHandler{}, nil
+		return arithHandler{}, p.Context, nil
 	}
 	router := httprouter.New()
-	for _, h := range exampleErrorMapper.Handlers(f) {
+	for _, h := range exampleServer.Handlers(f) {
 		router.Handle(h.Method, h.Path, h.Handle)
 	}
 	srv := httptest.NewServer(router)
@@ -58,8 +59,10 @@ type exampleErrorResponse struct {
 	Message string
 }
 
-var exampleErrorMapper httprequest.ErrorMapper = func(err error) (int, interface{}) {
-	return http.StatusInternalServerError, &exampleErrorResponse{
-		Message: err.Error(),
-	}
+var exampleServer = httprequest.Server{
+	ErrorMapper: func(ctx context.Context, err error) (int, interface{}) {
+		return http.StatusInternalServerError, &exampleErrorResponse{
+			Message: err.Error(),
+		}
+	},
 }

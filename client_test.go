@@ -1,7 +1,6 @@
 package httprequest_test
 
 import (
-	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -62,12 +61,12 @@ var callTests = []struct {
 		P:    "hello",
 		Body: struct{ I bool }{true},
 	},
-	expectError: `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal bool into Go value of type int`,
+	expectError: `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal .*`,
 	assertError: func(c *gc.C, err error) {
-		c.Assert(errgo.Cause(err), jc.DeepEquals, &httprequest.RemoteError{
-			Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal bool into Go value of type int`,
-			Code:    "bad request",
-		})
+		c.Assert(errgo.Cause(err), gc.FitsTypeOf, (*httprequest.RemoteError)(nil))
+		err1 := err.(*httprequest.RemoteError)
+		c.Assert(err1.Code, gc.Equals, "bad request")
+		c.Assert(err1.Message, gc.Matches, `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal .*`)
 	},
 }, {
 	about: "error unmarshaler returns nil",
@@ -155,21 +154,6 @@ var callTests = []struct {
 		P: "hello",
 	},
 	expectResp: &chM1Resp{"hello"},
-}, {
-	about: "context with request UUID",
-	client: httprequest.Client{
-		Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
-			if uuid := req.Header.Get(httprequest.RequestUUIDHeader); uuid != "test uuid" {
-				panic(fmt.Sprintf(`RequestUUID had unexpected value %q, expecting "test uuid"`, uuid))
-			}
-			return http.DefaultClient.Do(req)
-		}),
-	},
-	req: &chM1Req{
-		P: "hello",
-	},
-	requestUUID: "test uuid",
-	expectResp:  &chM1Resp{"hello"},
 }}
 
 func (s *clientSuite) TestCall(c *gc.C) {
@@ -185,7 +169,6 @@ func (s *clientSuite) TestCall(c *gc.C) {
 		client := test.client
 		client.BaseURL = srv.URL
 		ctx := context.Background()
-		ctx = httprequest.ContextWithRequestUUID(ctx, test.requestUUID)
 		err := client.Call(ctx, test.req, resp)
 		if test.expectError != "" {
 			c.Check(err, gc.ErrorMatches, test.expectError)
@@ -276,34 +259,6 @@ var doTests = []struct {
 	},
 	request:    mustNewRequest("/m2/foo", "POST", strings.NewReader(`{"I": 999}`)),
 	expectResp: &chM2Resp{"foo", 999},
-}, {
-	about: "context with request UUID",
-	client: httprequest.Client{
-		Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
-			if uuid := req.Header.Get(httprequest.RequestUUIDHeader); uuid != "test uuid" {
-				panic(fmt.Sprintf(`RequestUUID had unexpected value %q, expecting "test uuid"`, uuid))
-			}
-			return http.DefaultClient.Do(req)
-		}),
-	},
-	request:     mustNewRequest("/m1/hello", "GET", nil),
-	requestUUID: "test uuid",
-	expectResp:  &chM1Resp{"hello"},
-}, {
-	about: "context with request UUID but one already in request",
-	client: httprequest.Client{
-		Doer: doerFunc(func(req *http.Request) (*http.Response, error) {
-			if uuid := req.Header.Get(httprequest.RequestUUIDHeader); uuid != "test uuid 1" {
-				panic(fmt.Sprintf(`RequestUUID had unexpected value %q, expecting "test uuid 1"`, uuid))
-			}
-			return http.DefaultClient.Do(req)
-		}),
-	},
-	request: mustNewRequestWithHeader("/m1/hello", "GET", nil, http.Header{
-		httprequest.RequestUUIDHeader: []string{"test uuid 1"},
-	}),
-	requestUUID: "test uuid 2",
-	expectResp:  &chM1Resp{"hello"},
 }}
 
 func newInt64(i int64) *int64 {
@@ -324,7 +279,6 @@ func (s *clientSuite) TestDo(c *gc.C) {
 			client.BaseURL = srv.URL
 		}
 		ctx := context.Background()
-		ctx = httprequest.ContextWithRequestUUID(ctx, test.requestUUID)
 		err := client.Do(ctx, test.request, resp)
 		if test.expectError != "" {
 			c.Assert(err, gc.ErrorMatches, test.expectError)
@@ -581,10 +535,10 @@ func assertDecodeResponseError(c *gc.C, err error, status int, body string) {
 }
 
 func (*clientSuite) newServer() *httptest.Server {
-	f := func(p httprequest.Params) (clientHandlers, error) {
-		return clientHandlers{}, nil
+	f := func(p httprequest.Params) (clientHandlers, context.Context, error) {
+		return clientHandlers{}, p.Context, nil
 	}
-	handlers := errorMapper.Handlers(f)
+	handlers := testServer.Handlers(f)
 	router := httprouter.New()
 	for _, h := range handlers {
 		router.Handle(h.Method, h.Path, h.Handle)
