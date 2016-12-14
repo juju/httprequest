@@ -399,17 +399,17 @@ func (srv *Server) handlerCaller(
 func (srv *Server) handlerResponder(ft reflect.Type) func(p Params, outv []reflect.Value) {
 	switch ft.NumOut() {
 	case 0:
-		//	func(w http.ResponseWriter, p Params, arg *ArgT)
+		// func(...)
 		return func(Params, []reflect.Value) {}
 	case 1:
-		//	func(w http.ResponseWriter, p Params, arg *ArgT) error
+		// func(...) error
 		return func(p Params, outv []reflect.Value) {
 			if err := outv[0].Interface(); err != nil {
 				srv.WriteError(p.Context, p.Response, err.(error))
 			}
 		}
 	case 2:
-		//	func(header http.Header, p Params, arg *ArgT) (ResultT, error)
+		// func(...) (ResultT, error)
 		return func(p Params, outv []reflect.Value) {
 			if err := outv[1].Interface(); err != nil {
 				srv.WriteError(p.Context, p.Response, err.(error))
