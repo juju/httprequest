@@ -322,7 +322,7 @@ func checkHandleType(t, argInterfacet reflect.Type) (*requestType, error) {
 		return nil, errgo.Notef(err, "last argument cannot be used for Unmarshal")
 	}
 	if argInterfacet != nil && !argt.Implements(argInterfacet) {
-		return nil, errgo.Notef(err, "argument does not implement interface required by root handler %v", argInterfacet)
+		return nil, errgo.Notef(err, "argument of type %v does not implement interface required by root handler %v", argt, argInterfacet)
 	}
 	if t.NumOut() > 0 {
 		//	func(p Params, arg *ArgT) error

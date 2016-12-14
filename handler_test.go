@@ -641,7 +641,28 @@ func (*handlerSuite) TestHandlersRootFuncWithIncompatibleRequestArg(c *gc.C) {
 	}
 	c.Assert(func() {
 		testServer.Handlers(f)
-	}, gc.PanicMatches, `bad type for method M1: argument does not implement interface required by root handler interface \{ Foo\(\) \}`)
+	}, gc.PanicMatches, `bad type for method M1: argument of type \*struct {.*} does not implement interface required by root handler interface \{ Foo\(\) \}`)
+}
+
+func (*handlerSuite) TestHandlersRootFuncWithNonEmptyInterfaceRequestArg(c *gc.C) {
+	type tester interface {
+		Test() string
+	}
+	var argResult string
+	f := func(p httprequest.Params, arg tester) (*handlersWithRequestMethod, context.Context, error) {
+		argResult = arg.Test()
+		return &handlersWithRequestMethod{}, p.Context, nil
+	}
+	router := httprouter.New()
+	for _, h := range testServer.Handlers(f) {
+		router.Handle(h.Method, h.Path, h.Handle)
+	}
+	httptesting.AssertJSONCall(c, httptesting.JSONCallParams{
+		Handler:    router,
+		URL:        "/x1/something",
+		ExpectBody: "something",
+	})
+	c.Assert(argResult, jc.DeepEquals, "test something")
 }
 
 var badHandlersFuncTests = []struct {
@@ -1126,4 +1147,19 @@ func assertRequestEquals(c *gc.C, req1, req2 *http.Request) {
 	c.Assert(req1.RequestURI, gc.Equals, req2.RequestURI)
 	c.Assert(req1.TLS, gc.Equals, req2.TLS)
 	c.Assert(req1.Cancel, gc.Equals, req2.Cancel)
+}
+
+type handlersWithRequestMethod struct{}
+
+type x1Request struct {
+	httprequest.Route `httprequest:"GET /x1/:p"`
+	P                 string `httprequest:"p,path"`
+}
+
+func (r *x1Request) Test() string {
+	return "test " + r.P
+}
+
+func (h *handlersWithRequestMethod) X1(arg *x1Request) (string, error) {
+	return arg.P, nil
 }
