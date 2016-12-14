@@ -29,6 +29,33 @@ type Server struct {
 	ErrorMapper func(ctxt context.Context, err error) (httpStatus int, errorBody interface{})
 }
 
+// Handler defines a HTTP handler that will handle the
+// given HTTP method at the given httprouter path
+type Handler struct {
+	Method string
+	Path   string
+	Handle httprouter.Handle
+}
+
+// handlerFunc represents a function that can handle an HTTP request.
+type handlerFunc struct {
+	// unmarshal unmarshals the request parameters into
+	// the argument value required by the method.
+	unmarshal func(p Params) (reflect.Value, error)
+
+	// call invokes the request on the given function value with the
+	// given argument value (as returned by unmarshal).
+	call func(fv, argv reflect.Value, p Params)
+
+	// method holds the HTTP method the function will be
+	// registered for.
+	method string
+
+	// pathPattern holds the path pattern the function will
+	// be registered for.
+	pathPattern string
+}
+
 var (
 	paramsType             = reflect.TypeOf(Params{})
 	errorType              = reflect.TypeOf((*error)(nil)).Elem()
@@ -78,34 +105,46 @@ var (
 // forms.
 func (srv *Server) Handle(f interface{}) Handler {
 	fv := reflect.ValueOf(f)
-	hf, rt, err := srv.handlerFunc(fv.Type())
+	hf, err := srv.handlerFunc(fv.Type(), nil)
 	if err != nil {
 		panic(errgo.Notef(err, "bad handler function"))
 	}
 	return Handler{
-		Method: rt.method,
-		Path:   rt.path,
+		Method: hf.method,
+		Path:   hf.pathPattern,
 		Handle: func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 			ctx, cancel := contextFromRequest(req)
 			defer cancel()
-			hf(fv, Params{
+			p1 := Params{
 				Response:    w,
 				Request:     req,
 				PathVar:     p,
-				PathPattern: rt.path,
+				PathPattern: hf.pathPattern,
 				Context:     ctx,
-			})
+			}
+			argv, err := hf.unmarshal(p1)
+			if err != nil {
+				srv.WriteError(ctx, w, err)
+				return
+			}
+			hf.call(fv, argv, p1)
 		},
 	}
 }
 
 // Handlers returns a list of handlers that will be handled by the value
-// returned by the given argument, which must be a function of the form:
+// returned by the given argument, which must be a function in one of the
+// following forms:
 //
-// 	func(httprequest.Params) (T, context.Context, error)
+// 	func(p httprequest.Params) (T, context.Context, error)
+// 	func(p httprequest.Params, handlerArg I) (T, context.Context, error)
 //
-// for some type T. Each exported method defined on T defines a handler,
-// and should be in one of the forms accepted by ErrorMapper.Handle.
+// for some type T and some interface type I. Each exported method defined on T defines a handler,
+// and should be in one of the forms accepted by ErrorMapper.Handle
+// with the additional constraint that the argument to each
+// of the handlers must be compatible with the type I when the
+// second form is used above.
+//
 // The returned context will be used as the value of Params.Context
 // when Params is passed to any method. It will also be used
 // when writing an error if the function returns an error.
@@ -117,18 +156,19 @@ func (srv *Server) Handle(f interface{}) Handler {
 //
 // When any of the returned handlers is invoked, f will be called and
 // then the appropriate method will be called on the value it returns.
+// If specified, the handlerArg parameter to f will hold the ArgT argument that
+// will be passed to the handler method.
 //
 // If T implements io.Closer, its Close method will be called
 // after the request is completed.
 func (srv Server) Handlers(f interface{}) []Handler {
-	fv := reflect.ValueOf(f)
-	wt, err := checkHandlersWrapperFunc(fv)
+	rootv := reflect.ValueOf(f)
+	wt, argInterfacet, err := checkHandlersWrapperFunc(rootv)
 	if err != nil {
 		panic(errgo.Notef(err, "bad handler function"))
 	}
 	hasClose := wt.Implements(ioCloserType)
 	hs := make([]Handler, 0, wt.NumMethod())
-	numMethod := 0
 	for i := 0; i < wt.NumMethod(); i++ {
 		i := i
 		m := wt.Method(i)
@@ -141,102 +181,123 @@ func (srv Server) Handlers(f interface{}) []Handler {
 			}
 			continue
 		}
-		// The type in the Method struct includes the receiver type,
-		// which we don't want to look at (and we won't see when
-		// we get the method from the actual value at dispatch time),
-		// so we hide it.
-		mt := withoutReceiver(m.Type)
-		hf, rt, err := srv.handlerFunc(mt)
+		h, err := srv.methodHandler(m, rootv, argInterfacet, hasClose)
 		if err != nil {
-			panic(errgo.Notef(err, "bad type for method %s", m.Name))
+			panic(err)
 		}
-		if rt.method == "" || rt.path == "" {
-			panic(errgo.Notef(err, "method %s does not specify route method and path", m.Name))
-		}
-		handler := func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
-			ctx, cancel := contextFromRequest(req)
-			defer cancel()
-			outv := fv.Call([]reflect.Value{
-				reflect.ValueOf(Params{
-					Response:    w,
-					Request:     req,
-					PathVar:     p,
-					PathPattern: rt.path,
-					Context:     ctx,
-				}),
-			})
-			tv, ctxv, errv := outv[0], outv[1], outv[2]
-			// Get the context value robustly even if the
-			// handler stupidly decides to return nil and fall
-			// back to the original context if it does.
-			ctx1, _ := ctxv.Interface().(context.Context)
-			if ctx1 != nil {
-				ctx = ctx1
-			}
-			if !errv.IsNil() {
-				srv.WriteError(ctx, w, errv.Interface().(error))
-				return
-			}
-			if hasClose {
-				defer tv.Interface().(io.Closer).Close()
-			}
-			hf(tv.Method(i), Params{
-				Response:    w,
-				Request:     req,
-				PathVar:     p,
-				PathPattern: rt.path,
-				Context:     ctx,
-			})
-
-		}
-		hs = append(hs, Handler{
-			Method: rt.method,
-			Path:   rt.path,
-			Handle: handler,
-		})
-		numMethod++
+		hs = append(hs, h)
 	}
-	if numMethod == 0 {
+	if len(hs) == 0 {
 		panic(errgo.Newf("no exported methods defined on %s", wt))
 	}
 	return hs
 }
 
-func checkHandlersWrapperFunc(fv reflect.Value) (reflect.Type, error) {
+func (srv *Server) methodHandler(m reflect.Method, rootv reflect.Value, argInterfacet reflect.Type, hasClose bool) (Handler, error) {
+	// The type in the Method struct includes the receiver type,
+	// which we don't want to look at (and we won't see when
+	// we get the method from the actual value at dispatch time),
+	// so we hide it.
+	mt := withoutReceiver(m.Type)
+	hf, err := srv.handlerFunc(mt, argInterfacet)
+	if err != nil {
+		return Handler{}, errgo.Notef(err, "bad type for method %s", m.Name)
+	}
+	if hf.method == "" || hf.pathPattern == "" {
+		return Handler{}, errgo.Notef(err, "method %s does not specify route method and path", m.Name)
+	}
+	handler := func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
+		ctx, cancel := contextFromRequest(req)
+		defer cancel()
+		p1 := Params{
+			Response:    w,
+			Request:     req,
+			PathVar:     p,
+			PathPattern: hf.pathPattern,
+			Context:     ctx,
+		}
+		inv, err := hf.unmarshal(p1)
+		if err != nil {
+			srv.WriteError(ctx, w, err)
+			return
+		}
+		var outv []reflect.Value
+		if argInterfacet != nil {
+			outv = rootv.Call([]reflect.Value{
+				reflect.ValueOf(p1),
+				// Pass the value to the root function so it can do wrappy things with it.
+				// Note that because of the checks we've applied earlier, we can be
+				// sure that the value will implement the interface type of this argument.
+				inv,
+			})
+		} else {
+			outv = rootv.Call([]reflect.Value{
+				reflect.ValueOf(p1),
+			})
+		}
+		tv, ctxv, errv := outv[0], outv[1], outv[2]
+		// Get the context value robustly even if the
+		// handler stupidly decides to return nil, and fall
+		// back to the original context if it does.
+		ctx1, _ := ctxv.Interface().(context.Context)
+		if ctx1 != nil {
+			ctx = ctx1
+		}
+		if !errv.IsNil() {
+			srv.WriteError(ctx, w, errv.Interface().(error))
+			return
+		}
+		if hasClose {
+			defer tv.Interface().(io.Closer).Close()
+		}
+		hf.call(tv.Method(m.Index), inv, Params{
+			Response:    w,
+			Request:     req,
+			PathVar:     p,
+			PathPattern: hf.pathPattern,
+			Context:     ctx,
+		})
+	}
+	return Handler{
+		Method: hf.method,
+		Path:   hf.pathPattern,
+		Handle: handler,
+	}, nil
+}
+
+func checkHandlersWrapperFunc(fv reflect.Value) (returnt, argInterfacet reflect.Type, err error) {
 	ft := fv.Type()
 	if ft.Kind() != reflect.Func {
-		return nil, errgo.Newf("expected function, got %v", ft)
+		return nil, nil, errgo.Newf("expected function, got %v", ft)
 	}
 	if fv.IsNil() {
-		return nil, errgo.Newf("function is nil")
+		return nil, nil, errgo.Newf("function is nil")
 	}
-	if n := ft.NumIn(); n != 1 {
-		return nil, errgo.Newf("got %d arguments, want 1", n)
+	if n := ft.NumIn(); n != 1 && n != 2 {
+		return nil, nil, errgo.Newf("got %d arguments, want 1 or 2", n)
 	}
 	if n := ft.NumOut(); n != 3 {
-		return nil, errgo.Newf("function returns %d values, want (<T>, context.Context, error)", n)
+		return nil, nil, errgo.Newf("function returns %d values, want (<T>, context.Context, error)", n)
 	}
 	if t := ft.In(0); t != paramsType {
-		return nil, errgo.Newf("invalid argument, want httprequest.Params, got %v", t)
+		return nil, nil, errgo.Newf("invalid first argument, want httprequest.Params, got %v", t)
+	}
+	if ft.NumIn() > 1 {
+		if t := ft.In(1); t.Kind() != reflect.Interface {
+			return nil, nil, errgo.Newf("invalid second argument, want interface type, got %v", t)
+		}
+		argInterfacet = ft.In(1)
 	}
 	if t := ft.Out(1); !t.Implements(contextType) {
-		return nil, errgo.Newf("second return parameter of type %v does not implement context.Context", t)
+		return nil, nil, errgo.Newf("second return parameter of type %v does not implement context.Context", t)
 	}
 	if t := ft.Out(2); t != errorType {
-		return nil, errgo.Newf("invalid third return parameter, want error, got %v", t)
+		return nil, nil, errgo.Newf("invalid third return parameter, want error, got %v", t)
 	}
-	return ft.Out(0), nil
+	return ft.Out(0), argInterfacet, nil
 }
 
-// Handler defines a HTTP handler that will handle the
-// given HTTP method at the given httprouter path
-type Handler struct {
-	Method string
-	Path   string
-	Handle httprouter.Handle
-}
-
-func checkHandleType(t reflect.Type) (*requestType, error) {
+func checkHandleType(t, argInterfacet reflect.Type) (*requestType, error) {
 	if t.Kind() != reflect.Func {
 		return nil, errgo.New("not a function")
 	}
@@ -255,9 +316,13 @@ func checkHandleType(t reflect.Type) (*requestType, error) {
 			return nil, errgo.Newf("no argument parameter after Params argument")
 		}
 	}
-	pt, err := getRequestType(t.In(t.NumIn() - 1))
+	argt := t.In(t.NumIn() - 1)
+	pt, err := getRequestType(argt)
 	if err != nil {
 		return nil, errgo.Notef(err, "last argument cannot be used for Unmarshal")
+	}
+	if argInterfacet != nil && !argt.Implements(argInterfacet) {
+		return nil, errgo.Notef(err, "argument does not implement interface required by root handler %v", argInterfacet)
 	}
 	if t.NumOut() > 0 {
 		//	func(p Params, arg *ArgT) error
@@ -272,102 +337,85 @@ func checkHandleType(t reflect.Type) (*requestType, error) {
 // handlerFunc returns a function that will call a function of the given type,
 // unmarshaling request parameters and marshaling the response as
 // appropriate.
-func (srv *Server) handlerFunc(ft reflect.Type) (func(fv reflect.Value, p Params), *requestType, error) {
-	rt, err := checkHandleType(ft)
+func (srv *Server) handlerFunc(ft, argInterfacet reflect.Type) (handlerFunc, error) {
+	rt, err := checkHandleType(ft, argInterfacet)
 	if err != nil {
-		return nil, nil, errgo.Mask(err)
+		return handlerFunc{}, errgo.Mask(err)
 	}
-	return srv.handleResult(ft, handleParams(ft, rt)), rt, nil
+	return handlerFunc{
+		unmarshal:   handlerUnmarshaler(ft, rt),
+		call:        srv.handlerCaller(ft, rt),
+		method:      rt.method,
+		pathPattern: rt.path,
+	}, nil
 }
 
-// handleParams handles unmarshaling the parameters to be passed to
-// a function of type ft. The rt parameter describes ft (as determined by
-// checkHandleType). The returned function accepts the actual function
-// value to use in the call as well as the request parameters and returns
-// the result value to use for marshaling.
-func handleParams(
+func handlerUnmarshaler(
 	ft reflect.Type,
 	rt *requestType,
-) func(fv reflect.Value, p Params) ([]reflect.Value, error) {
-	returnJSON := ft.NumOut() > 1
-	needsParams := ft.In(0) == paramsType
-	if needsParams {
-		argStructType := ft.In(1).Elem()
-		return func(fv reflect.Value, p Params) ([]reflect.Value, error) {
-			if err := p.Request.ParseForm(); err != nil {
-				return nil, errgo.WithCausef(err, ErrUnmarshal, "cannot parse HTTP request form")
-			}
-			if returnJSON {
-				p.Response = headerOnlyResponseWriter{p.Response.Header()}
-			}
-			argv := reflect.New(argStructType)
-			if err := unmarshal(p, argv, rt); err != nil {
-				return nil, errgo.NoteMask(err, "cannot unmarshal parameters", errgo.Is(ErrUnmarshal))
-			}
-			return fv.Call([]reflect.Value{
-				reflect.ValueOf(p),
-				argv,
-			}), nil
-		}
-	}
-	argStructType := ft.In(0).Elem()
-	return func(fv reflect.Value, p Params) ([]reflect.Value, error) {
+) func(p Params) (reflect.Value, error) {
+	argStructType := ft.In(ft.NumIn() - 1).Elem()
+	return func(p Params) (reflect.Value, error) {
 		if err := p.Request.ParseForm(); err != nil {
-			return nil, errgo.WithCausef(err, ErrUnmarshal, "cannot parse HTTP request form")
+			return reflect.Value{}, errgo.WithCausef(err, ErrUnmarshal, "cannot parse HTTP request form")
 		}
 		argv := reflect.New(argStructType)
 		if err := unmarshal(p, argv, rt); err != nil {
-			return nil, errgo.NoteMask(err, "cannot unmarshal parameters", errgo.Is(ErrUnmarshal))
+			return reflect.Value{}, errgo.NoteMask(err, "cannot unmarshal parameters", errgo.Is(ErrUnmarshal))
 		}
-		return fv.Call([]reflect.Value{argv}), nil
+		return argv, nil
 	}
-
 }
 
-// handleResult handles the marshaling of the result values from the call to a function
-// of type ft. The returned function accepts the actual function value to use in the
-// call as well as the request parameters.
-func (srv *Server) handleResult(
+func (srv *Server) handlerCaller(
 	ft reflect.Type,
-	f func(fv reflect.Value, p Params) ([]reflect.Value, error),
-) func(fv reflect.Value, p Params) {
+	rt *requestType,
+) func(fv, argv reflect.Value, p Params) {
+	returnJSON := ft.NumOut() > 1
+	needsParams := ft.In(0) == paramsType
+	respond := srv.handlerResponder(ft)
+	return func(fv, argv reflect.Value, p Params) {
+		var rv []reflect.Value
+		if needsParams {
+			p := p
+			if returnJSON {
+				p.Response = headerOnlyResponseWriter{p.Response.Header()}
+			}
+			rv = fv.Call([]reflect.Value{
+				reflect.ValueOf(p),
+				argv,
+			})
+		} else {
+			rv = fv.Call([]reflect.Value{
+				argv,
+			})
+		}
+		respond(p, rv)
+	}
+}
+
+// handlerResponder handles the marshaling of the result values from the call to a function
+// of type ft. The returned function accepts the values returned by the handler.
+func (srv *Server) handlerResponder(ft reflect.Type) func(p Params, outv []reflect.Value) {
 	switch ft.NumOut() {
 	case 0:
 		//	func(w http.ResponseWriter, p Params, arg *ArgT)
-		return func(fv reflect.Value, p Params) {
-			_, err := f(fv, p)
-			if err != nil {
-				srv.WriteError(p.Context, p.Response, err)
-			}
-		}
+		return func(Params, []reflect.Value) {}
 	case 1:
 		//	func(w http.ResponseWriter, p Params, arg *ArgT) error
-		return func(fv reflect.Value, p Params) {
-			out, err := f(fv, p)
-			if err != nil {
-				srv.WriteError(p.Context, p.Response, err)
-				return
-			}
-			herr := out[0].Interface()
-			if herr != nil {
-				srv.WriteError(p.Context, p.Response, herr.(error))
+		return func(p Params, outv []reflect.Value) {
+			if err := outv[0].Interface(); err != nil {
+				srv.WriteError(p.Context, p.Response, err.(error))
 			}
 		}
 	case 2:
 		//	func(header http.Header, p Params, arg *ArgT) (ResultT, error)
-		return func(fv reflect.Value, p Params) {
-			out, err := f(fv, p)
-			if err != nil {
-				srv.WriteError(p.Context, p.Response, err)
+		return func(p Params, outv []reflect.Value) {
+			if err := outv[1].Interface(); err != nil {
+				srv.WriteError(p.Context, p.Response, err.(error))
 				return
 			}
-			herr := out[1].Interface()
-			if herr != nil {
-				srv.WriteError(p.Context, p.Response, herr.(error))
-				return
-			}
-			err = WriteJSON(p.Response, http.StatusOK, out[0].Interface())
-			if err != nil {
+			if err := WriteJSON(p.Response, http.StatusOK, outv[0].Interface()); err != nil {
 				srv.WriteError(p.Context, p.Response, err)
 			}
 		}

@@ -574,10 +574,12 @@ func (h *testHandlers) M1(p httprequest.Params, arg *struct {
 	h.c.Check(p.Context, gc.NotNil)
 }
 
-func (h *testHandlers) M2(arg *struct {
+type m2Request struct {
 	httprequest.Route `httprequest:"GET /m2/:p"`
 	P                 int `httprequest:"p,path"`
-}) (int, error) {
+}
+
+func (h *testHandlers) M2(arg *m2Request) (int, error) {
 	h.calledMethod = "M2"
 	h.c.Check(arg.P, gc.Equals, 99)
 	return 999, nil
@@ -603,6 +605,45 @@ func (h *testHandlers) M3Post(arg *struct {
 	h.c.Check(arg.P, gc.Equals, 99)
 }
 
+func (*handlerSuite) TestHandlersRootFuncWithRequestArg(c *gc.C) {
+	handleVal := testHandlers{
+		c: c,
+	}
+	var gotArg interface{}
+	f := func(p httprequest.Params, arg interface{}) (*testHandlers, context.Context, error) {
+		gotArg = arg
+		return &handleVal, p.Context, nil
+	}
+	router := httprouter.New()
+	for _, h := range testServer.Handlers(f) {
+		router.Handle(h.Method, h.Path, h.Handle)
+	}
+	httptesting.AssertJSONCall(c, httptesting.JSONCallParams{
+		Handler:    router,
+		URL:        "/m2/99",
+		ExpectBody: 999,
+	})
+	c.Assert(gotArg, jc.DeepEquals, &m2Request{
+		P: 99,
+	})
+}
+
+func (*handlerSuite) TestHandlersRootFuncWithIncompatibleRequestArg(c *gc.C) {
+	handleVal := testHandlers{
+		c: c,
+	}
+	var gotArg interface{}
+	f := func(p httprequest.Params, arg interface {
+		Foo()
+	}) (*testHandlers, context.Context, error) {
+		gotArg = arg
+		return &handleVal, p.Context, nil
+	}
+	c.Assert(func() {
+		testServer.Handlers(f)
+	}, gc.PanicMatches, `bad type for method M1: argument does not implement interface required by root handler interface \{ Foo\(\) \}`)
+}
+
 var badHandlersFuncTests = []struct {
 	about       string
 	f           interface{}
@@ -618,11 +659,11 @@ var badHandlersFuncTests = []struct {
 }, {
 	about:       "no arguments",
 	f:           func() {},
-	expectPanic: "bad handler function: got 0 arguments, want 1",
+	expectPanic: "bad handler function: got 0 arguments, want 1 or 2",
 }, {
-	about:       "more than one argument",
-	f:           func(http.ResponseWriter, *http.Request) {},
-	expectPanic: "bad handler function: got 2 arguments, want 1",
+	about:       "more than two argument",
+	f:           func(http.ResponseWriter, *http.Request, int) {},
+	expectPanic: "bad handler function: got 3 arguments, want 1 or 2",
 }, {
 	about:       "no return values",
 	f:           func(httprequest.Params) {},
@@ -642,7 +683,11 @@ var badHandlersFuncTests = []struct {
 }, {
 	about:       "invalid first argument",
 	f:           func(string) (_ string, _ context.Context, _ error) { return },
-	expectPanic: `bad handler function: invalid argument, want httprequest.Params, got string`,
+	expectPanic: `bad handler function: invalid first argument, want httprequest.Params, got string`,
+}, {
+	about:       "second argument not an interface",
+	f:           func(httprequest.Params, *http.Request) (_ string, _ context.Context, _ error) { return },
+	expectPanic: `bad handler function: invalid second argument, want interface type, got \*http.Request`,
 }, {
 	about:       "non-error return",
 	f:           func(httprequest.Params) (_ string, _ context.Context, _ string) { return },
@@ -710,7 +755,7 @@ func (*handlerSuite) TestHandlersFuncReturningError(c *gc.C) {
 		router.Handle(h.Method, h.Path, h.Handle)
 	}
 	httptesting.AssertJSONCall(c, httptesting.JSONCallParams{
-		URL:          "/m1/p",
+		URL:          "/m1/99",
 		Handler:      router,
 		ExpectStatus: http.StatusUnauthorized,
 		ExpectBody: &httprequest.RemoteError{
