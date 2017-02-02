@@ -292,7 +292,7 @@ var handleTests = []struct {
 		Value: "not a number",
 	}},
 	expectBody: httprequest.RemoteError{
-		Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot parse "not a number" into int: expected integer`,
+		Message: `cannot unmarshal parameters: cannot unmarshal into field A: cannot parse "not a number" into int: expected integer`,
 		Code:    "bad request",
 	},
 	expectStatus: http.StatusBadRequest,
@@ -313,7 +313,7 @@ var handleTests = []struct {
 		Value: "not a number",
 	}},
 	expectBody: httprequest.RemoteError{
-		Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot parse "not a number" into int: expected integer`,
+		Message: `cannot unmarshal parameters: cannot unmarshal into field A: cannot parse "not a number" into int: expected integer`,
 		Code:    "bad request",
 	},
 	expectStatus: http.StatusBadRequest,
@@ -334,7 +334,7 @@ var handleTests = []struct {
 		Value: "not a number",
 	}},
 	expectBody: httprequest.RemoteError{
-		Message: `cannot unmarshal parameters: cannot unmarshal into field: cannot parse "not a number" into int: expected integer`,
+		Message: `cannot unmarshal parameters: cannot unmarshal into field A: cannot parse "not a number" into int: expected integer`,
 		Code:    "bad request",
 	},
 	expectStatus: http.StatusBadRequest,
