@@ -71,10 +71,8 @@ func unmarshal(p Params, xv reflect.Value, pt *requestType) error {
 	xv = xv.Elem()
 	for _, f := range pt.fields {
 		fv := xv.FieldByIndex(f.index)
-		// TODO store the field name in the field so
-		// that we can produce a nice error message.
 		if err := f.unmarshal(fv, p, f.makeResult); err != nil {
-			return errgo.WithCausef(err, ErrUnmarshal, "cannot unmarshal into field")
+			return errgo.WithCausef(err, ErrUnmarshal, "cannot unmarshal into field %s", f.name)
 		}
 	}
 	return nil

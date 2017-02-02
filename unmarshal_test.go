@@ -383,7 +383,43 @@ var unmarshalTests = []struct {
 			},
 		},
 	},
+}, {
+	about: "anonymous body field with pointer field",
+	val: struct {
+		BodyWithPointer `httprequest:",body"`
+	}{},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Header: http.Header{"Content-Type": {"application/json"}},
+			Body:   body("{}"),
+		},
+	},
+}, {
+	about: "anonymous field with tag",
+	val: struct {
+		StructTextUnmarshaler `httprequest:"x,form"`
+	}{
+		StructTextUnmarshaler{"something"},
+	},
+	params: httprequest.Params{
+		Request: &http.Request{
+			Form: url.Values{
+				"x": {"something"},
+			},
+			Body: body(`"h val"`),
+		},
+		PathVar: httprouter.Params{{
+			// Note that this is the tagged field in the StructTextUnmarshaler type.
+			Key:   "foo",
+			Value: "ignored",
+		}},
+	},
 }}
+
+// User represents a user in the system.
+type BodyWithPointer struct {
+	N *int
+}
 
 type SFG struct {
 	F int `httprequest:",form"`
@@ -396,7 +432,7 @@ type sFG struct {
 }
 
 func (*unmarshalSuite) TestUnmarshal(c *gc.C) {
-	for i, test := range unmarshalTests {
+	for i, test := range unmarshalTests[len(unmarshalTests)-1:] {
 		c.Logf("%d: %s", i, test.about)
 		t := reflect.TypeOf(test.val)
 		fillv := reflect.New(t)
@@ -405,6 +441,7 @@ func (*unmarshalSuite) TestUnmarshal(c *gc.C) {
 			c.Assert(err, gc.ErrorMatches, test.expectError)
 			continue
 		}
+		c.Assert(err, gc.Equals, nil)
 		c.Assert(fillv.Elem().Interface(), jc.DeepEquals, test.val)
 	}
 }
@@ -426,6 +463,17 @@ func (t *exclamationUnmarshaler) UnmarshalText(b []byte) error {
 		return fmt.Errorf("empty string!")
 	}
 	*t = exclamationUnmarshaler(b) + "!"
+	return nil
+}
+
+type StructTextUnmarshaler struct {
+	// The tag on this field should be ignored because
+	// the struct is embedded as an anonymous field.
+	Foo string `httprequest:"foo,path"`
+}
+
+func (t *StructTextUnmarshaler) UnmarshalText(data []byte) error {
+	t.Foo = string(data)
 	return nil
 }
 
