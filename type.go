@@ -76,6 +76,8 @@ type requestType struct {
 // field holds preprocessed information on an individual field
 // in the request.
 type field struct {
+	name string
+
 	// index holds the index slice of the field.
 	index []int
 
@@ -133,11 +135,20 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 	hasBody := false
 	var pt requestType
 	foundRoute := false
+	// taggedFieldIndex holds the index of most recent anonymous
+	// tagged field - we will skip any fields inside that.
+	// It is nil when we're not inside an anonymous tagged field.
+	var taggedFieldIndex []int
 	for _, f := range fields(t.Elem()) {
 		if f.PkgPath != "" && !f.Anonymous {
 			// Ignore non-anonymous unexported fields.
 			continue
 		}
+		if taggedFieldIndex != nil && withinIndex(f.Index, taggedFieldIndex) {
+			// Ignore fields within tagged anonymous fields.
+			continue
+		}
+		taggedFieldIndex = nil
 		if !foundRoute && f.Anonymous && f.Type == reflect.TypeOf(Route{}) {
 			var err error
 			pt.method, pt.path, err = parseRouteTag(f.Tag)
@@ -159,6 +170,7 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 		}
 		field := field{
 			index: f.Index,
+			name:  f.Name,
 		}
 		if f.Type.Kind() == reflect.Ptr {
 			// The field is a pointer, so when the value is set,
@@ -182,14 +194,29 @@ func parseRequestType(t reflect.Type) (*requestType, error) {
 			return nil, errgo.Mask(err)
 		}
 
-		if f.Anonymous {
-			if tag.source != sourceBody && tag.source != sourceNone {
-				return nil, errgo.New("httprequest tag not yet supported on anonymous fields")
-			}
+		if f.Anonymous && tag.source != sourceNone {
+			taggedFieldIndex = f.Index
 		}
 		pt.fields = append(pt.fields, field)
 	}
 	return &pt, nil
+}
+
+// withinIndex reports whether the field with index i0 should be
+// considered to be within the field with index i1.
+func withinIndex(i0, i1 []int) bool {
+	// The index of a field within an anonymous field is formed by
+	// appending its field offset to the anonymous field's index, so
+	// it is sufficient that we check that i0 is prefixed by i1.
+	if len(i0) < len(i1) {
+		return false
+	}
+	for i := range i1 {
+		if i0[i] != i1[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Note: we deliberately omit HEAD and OPTIONS

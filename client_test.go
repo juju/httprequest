@@ -61,12 +61,12 @@ var callTests = []struct {
 		P:    "hello",
 		Body: struct{ I bool }{true},
 	},
-	expectError: `Post http:.*: cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal .*`,
+	expectError: `Post http:.*: cannot unmarshal parameters: cannot unmarshal into field Body: cannot unmarshal request body: json: cannot unmarshal .*`,
 	assertError: func(c *gc.C, err error) {
 		c.Assert(errgo.Cause(err), gc.FitsTypeOf, (*httprequest.RemoteError)(nil))
 		err1 := errgo.Cause(err).(*httprequest.RemoteError)
 		c.Assert(err1.Code, gc.Equals, "bad request")
-		c.Assert(err1.Message, gc.Matches, `cannot unmarshal parameters: cannot unmarshal into field: cannot unmarshal request body: json: cannot unmarshal .*`)
+		c.Assert(err1.Message, gc.Matches, `cannot unmarshal parameters: cannot unmarshal into field Body: cannot unmarshal request body: json: cannot unmarshal .*`)
 	},
 }, {
 	about: "error unmarshaler returns nil",
