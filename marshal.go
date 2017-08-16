@@ -43,6 +43,10 @@ var emptyReader = bytes.NewReader(nil)
 // be used directly; otherwise if implements encoding.TextMarshaler, that
 // will be used to marshal the field, otherwise fmt.Sprint will be used.
 //
+// An "omitempty" attribute on a form or header field specifies that
+// if the form or header value is empty, the form or header entry
+// will be omitted.
+//
 // For example, this code:
 //
 //	type UserDetails struct {
@@ -52,6 +56,7 @@ var emptyReader = bytes.NewReader(nil)
 //	type Test struct {
 //	    Username string `httprequest:"user,path"`
 //	    ContextId int64 `httprequest:"context,form"`
+//	    Extra string `httprequest:"context,form,omitempty"`
 //	    Details UserDetails `httprequest:",body"`
 //	}
 //	req, err := Marshal("GET", "http://example.com/users/:user/details", &Test{
@@ -229,7 +234,9 @@ func marshalBody(v reflect.Value, p *Params) error {
 // marshalAllField marshals a []string slice into form fields.
 func marshalAllField(name string) marshaler {
 	return func(v reflect.Value, p *Params) error {
-		p.Request.Form[name] = v.Interface().([]string)
+		if ss := v.Interface().([]string); len(ss) > 0 {
+			p.Request.Form[name] = ss
+		}
 		return nil
 	}
 }
@@ -237,17 +244,16 @@ func marshalAllField(name string) marshaler {
 // marshalAllHeader marshals a []string slice into a header.
 func marshalAllHeader(name string) marshaler {
 	return func(v reflect.Value, p *Params) error {
-		p.Request.Header[name] = v.Interface().([]string)
+		if ss := v.Interface().([]string); len(ss) > 0 {
+			p.Request.Header[name] = ss
+		}
 		return nil
 	}
 }
 
 // marshalString marshals s string field.
 func marshalString(tag tag) marshaler {
-	formSet := formSetters[tag.source]
-	if formSet == nil {
-		panic("unexpected source")
-	}
+	formSet := formSetter(tag)
 	return func(v reflect.Value, p *Params) error {
 		formSet(tag.name, v.String(), p)
 		return nil
@@ -275,10 +281,7 @@ func implementsTextMarshaler(t reflect.Type) bool {
 // that marshals the given type from the given tag
 // using its MarshalText method.
 func marshalWithMarshalText(t reflect.Type, tag tag) marshaler {
-	formSet := formSetters[tag.source]
-	if formSet == nil {
-		panic("unexpected source")
-	}
+	formSet := formSetter(tag)
 	return func(v reflect.Value, p *Params) error {
 		m := v.Addr().Interface().(encodingTextMarshaler)
 		data, err := m.MarshalText()
@@ -286,24 +289,34 @@ func marshalWithMarshalText(t reflect.Type, tag tag) marshaler {
 			return errgo.Mask(err)
 		}
 		formSet(tag.name, string(data), p)
-
 		return nil
 	}
 }
 
-// marshalWithScan returns an marshaler
+// marshalWithSprint returns an marshaler
 // that unmarshals the given tag using fmt.Sprint.
 func marshalWithSprint(tag tag) marshaler {
-	formSet := formSetters[tag.source]
+	formSet := formSetter(tag)
+	return func(v reflect.Value, p *Params) error {
+		formSet(tag.name, fmt.Sprint(v.Interface()), p)
+		return nil
+	}
+}
+
+// formSetter returns a function that can set the value
+// for a given tag.
+func formSetter(t tag) func(name, value string, p *Params) {
+	formSet := formSetters[t.source]
 	if formSet == nil {
 		panic("unexpected source")
 	}
-	return func(v reflect.Value, p *Params) error {
-		valueString := fmt.Sprint(v.Interface())
-
-		formSet(tag.name, valueString, p)
-
-		return nil
+	if !t.omitempty {
+		return formSet
+	}
+	return func(name, value string, p *Params) {
+		if value != "" {
+			formSet(name, value, p)
+		}
 	}
 }
 
