@@ -38,11 +38,15 @@ var marshalTests = []struct {
 	val: &struct {
 		F1 int    `httprequest:",path"`
 		F2 string `httprequest:",form"`
+		F3 string `httprequest:",form,omitempty"`
+		F4 string `httprequest:",form,omitempty"`
 	}{
 		F1: 99,
 		F2: "some text",
+		F3: "",
+		F4: "something",
 	},
-	expectURLString: "http://localhost:8081/99?F2=some+text",
+	expectURLString: "http://localhost:8081/99?F2=some+text&F4=something",
 }, {
 	about:     "struct with renamed fields",
 	urlString: "http://localhost:8081/:name",
@@ -152,6 +156,20 @@ var marshalTests = []struct {
 		F1: []string{"user1", "user2", "user3"},
 	},
 	expectError: "bad type .*: invalid target type.*",
+}, {
+	about:     "omitempty on body",
+	urlString: "http://localhost:8081/:users",
+	val: &struct {
+		Body string `httprequest:",body,omitempty"`
+	}{},
+	expectError: `bad type \*struct { Body string "httprequest:\\",body,omitempty\\"" }: bad tag "httprequest:\\",body,omitempty\\"" in field Body: can only use omitempty with form or header fields`,
+}, {
+	about:     "omitempty on path",
+	urlString: "http://localhost:8081/:Users",
+	val: &struct {
+		Users string `httprequest:",path,omitempty"`
+	}{},
+	expectError: `bad type \*struct { Users string "httprequest:\\",path,omitempty\\"" }: bad tag "httprequest:\\",path,omitempty\\"" in field Users: can only use omitempty with form or header fields`,
 }, {
 	about:     "more than one field with body tag",
 	urlString: "http://localhost:8081/user",
@@ -320,16 +338,21 @@ var marshalTests = []struct {
 		F1 string `httprequest:",header"`
 		F2 int    `httprequest:",header"`
 		F3 bool   `httprequest:",header"`
+		F4 string `httprequest:",header,omitempty"`
+		F5 string `httprequest:",header,omitempty"`
 	}{
 		F1: "some text",
 		F2: 99,
 		F3: true,
+		F4: "",
+		F5: "something",
 	},
 	expectURLString: "http://localhost:8081/",
 	expectHeader: http.Header{
 		"F1": []string{"some text"},
 		"F2": []string{"99"},
 		"F3": []string{"true"},
+		"F5": []string{"something"},
 	},
 }, {
 	about:     "struct with header slice",

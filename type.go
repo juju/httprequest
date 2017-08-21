@@ -274,8 +274,9 @@ const (
 )
 
 type tag struct {
-	name   string
-	source tagSource
+	name      string
+	source    tagSource
+	omitempty bool
 }
 
 // parseTag parses the given struct tag attached to the given
@@ -302,9 +303,14 @@ func parseTag(rtag reflect.StructTag, fieldName string) (tag, error) {
 			t.source = sourceBody
 		case "header":
 			t.source = sourceHeader
+		case "omitempty":
+			t.omitempty = true
 		default:
 			return tag{}, fmt.Errorf("unknown tag flag %q", f)
 		}
+	}
+	if t.omitempty && t.source != sourceForm && t.source != sourceHeader {
+		return tag{}, fmt.Errorf("can only use omitempty with form or header fields")
 	}
 	return t, nil
 }
