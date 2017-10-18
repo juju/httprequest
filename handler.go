@@ -66,6 +66,13 @@ var (
 	ioCloserType           = reflect.TypeOf((*io.Closer)(nil)).Elem()
 )
 
+// AddHandlers adds all the handlers in the given slice to r.
+func AddHandlers(r *httprouter.Router, hs []Handler) {
+	for _, h := range hs {
+		r.Handle(h.Method, h.Path, h.Handle)
+	}
+}
+
 // Handle converts a function into a Handler. The argument f
 // must be a function of one of the following six forms, where ArgT
 // must be a struct type acceptable to Unmarshal and ResultT is a type
