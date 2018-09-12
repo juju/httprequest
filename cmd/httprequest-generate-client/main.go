@@ -10,13 +10,15 @@ import (
 	"go/build"
 	"go/format"
 	"go/parser"
+	"go/token"
 	"io/ioutil"
 	"os"
 	"strings"
 	"text/template"
 
 	"go/types"
-	"golang.org/x/tools/go/loader"
+
+	"golang.org/x/tools/go/packages"
 	"gopkg.in/errgo.v1"
 )
 
@@ -134,25 +136,27 @@ type method struct {
 	RespType  string
 }
 
+// serverMethods returns the list of server methods and required import packages
+// provided by the given server type within the given server package.
+//
+// The localPkg package will be the one that the code will be generated in.
 func serverMethods(serverPkg, serverType, localPkg string) ([]method, []string, error) {
-	cfg := loader.Config{
-		TypeCheckFuncBodies: func(string) bool {
-			return false
+	cfg := packages.Config{
+		Mode: packages.LoadSyntax,
+		ParseFile: func(fset *token.FileSet, filename string) (*ast.File, error) {
+			return parser.ParseFile(fset, filename, nil, parser.ParseComments)
 		},
-		ImportPkgs: map[string]bool{
-			serverPkg: false, // false means don't load tests.
-		},
-		ParserMode: parser.ParseComments,
 	}
-	prog, err := cfg.Load()
+	pkgs, err := packages.Load(&cfg, serverPkg)
 	if err != nil {
 		return nil, nil, errgo.Notef(err, "cannot load %q", serverPkg)
 	}
-	pkgInfo := prog.Imported[serverPkg]
-	if pkgInfo == nil {
-		return nil, nil, errgo.Newf("cannot find %q in imported code", serverPkg)
+	if len(pkgs) != 1 {
+		return nil, nil, errgo.Newf("packages.Load returned %d packages, not 1", len(pkgs))
 	}
-	pkg := pkgInfo.Pkg
+	pkgInfo := pkgs[0]
+	pkg := pkgInfo.Types
+
 	obj := pkg.Scope().Lookup(serverType)
 	if obj == nil {
 		return nil, nil, errgo.Newf("type %s not found in %s", serverType, serverPkg)
@@ -184,7 +188,7 @@ func serverMethods(serverPkg, serverType, localPkg string) ([]method, []string, 
 			fmt.Fprintf(os.Stderr, "ignoring method %s: %v\n", name, err)
 			continue
 		}
-		comment := docComment(prog, sel)
+		comment := docComment(pkgInfo, sel)
 		methods = append(methods, method{
 			Name:      name,
 			Doc:       comment,
@@ -202,26 +206,24 @@ func serverMethods(serverPkg, serverType, localPkg string) ([]method, []string, 
 
 // docComment returns the doc comment for the method referred to
 // by the given selection.
-func docComment(prog *loader.Program, sel *types.Selection) string {
+func docComment(pkg *packages.Package, sel *types.Selection) string {
 	obj := sel.Obj()
-	tokFile := prog.Fset.File(obj.Pos())
+	tokFile := pkg.Fset.File(obj.Pos())
 	if tokFile == nil {
 		panic("no file found for method")
 	}
 	filename := tokFile.Name()
-	for _, pkgInfo := range prog.AllPackages {
-		for _, f := range pkgInfo.Files {
-			if tokFile := prog.Fset.File(f.Pos()); tokFile == nil || tokFile.Name() != filename {
-				continue
-			}
-			// We've found the file we're looking for. Now traverse all
-			// top level declarations looking for the right function declaration.
-			for _, decl := range f.Decls {
-				fdecl, ok := decl.(*ast.FuncDecl)
-				if ok && fdecl.Name.Pos() == obj.Pos() {
-					// Found it!
-					return commentStr(fdecl.Doc)
-				}
+	for _, f := range pkg.Syntax {
+		if tokFile := pkg.Fset.File(f.Pos()); tokFile == nil || tokFile.Name() != filename {
+			continue
+		}
+		// We've found the file we're looking for. Now traverse all
+		// top level declarations looking for the right function declaration.
+		for _, decl := range f.Decls {
+			fdecl, ok := decl.(*ast.FuncDecl)
+			if ok && fdecl.Name.Pos() == obj.Pos() {
+				// Found it!
+				return commentStr(fdecl.Doc)
 			}
 		}
 	}
