@@ -15,7 +15,7 @@ require (
 	github.com/rogpeppe/fastuuid v0.0.0-20150106093220-6724a57986af
 	golang.org/x/crypto v0.0.0-20160922170629-8e06e8ddd962
 	golang.org/x/net v0.0.0-20150829230318-ea47fc708ee3
-	golang.org/x/tools v0.0.0-20160427052601-1f1b3322f67a
+	golang.org/x/tools v0.0.0-20180911133044-677d2ff680c1
 	gopkg.in/check.v1 v1.0.0-20160105164936-4f90aeace3a2
 	gopkg.in/errgo.v1 v1.0.0-20151007153157-66cb46252b94
 	gopkg.in/mgo.v2 v2.0.0-20160818015218-f2b6f6c918c4

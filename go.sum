@@ -26,7 +26,10 @@ golang.org/x/crypto v0.0.0-20160922170629-8e06e8ddd962 h1:mWFWs/KZ0R2cLgNYRn+C4p
 golang.org/x/crypto v0.0.0-20160922170629-8e06e8ddd962/go.mod h1:6SG95UA2DQfeDnfUPMdvaQW0Q7yPrPDi9nlGo2tz2b4=
 golang.org/x/net v0.0.0-20150829230318-ea47fc708ee3 h1:vQKsY7JYxkBiIr0dkSCjLB4p7gONfkUsJHkLCH+pUQU=
 golang.org/x/net v0.0.0-20150829230318-ea47fc708ee3/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
+golang.org/x/tools v0.0.0-20160427052601-1f1b3322f67a h1:z4ZuTJ7M2JRC3+8SVZMeaLQcb5YwZPQo9m6X+cnNvA8=
 golang.org/x/tools v0.0.0-20160427052601-1f1b3322f67a/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
+golang.org/x/tools v0.0.0-20180911133044-677d2ff680c1 h1:dzEuQYa6+a3gROnSlgly5ERUm4SZKJt+dh+4iSbO+bI=
+golang.org/x/tools v0.0.0-20180911133044-677d2ff680c1/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
 gopkg.in/check.v1 v1.0.0-20160105164936-4f90aeace3a2 h1:+j1SppRob9bAgoYmsdW9NNBdKZfgYuWpqnYHv78Qt8w=
 gopkg.in/check.v1 v1.0.0-20160105164936-4f90aeace3a2/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/errgo.v1 v1.0.0-20151007153157-66cb46252b94 h1:ZA1f6ozm5hD4K7/ALu4EdbSoAsBMm8M/nMP9eoow3IY=
